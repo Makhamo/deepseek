@@ -1,0 +1,25 @@
+# Dependencies and build output are produced inside the image.
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+coverage
+test-results
+playwright-report
+
+# Never bake secrets into an image.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+# Environment files for the VPS live only on the server.
+infra/deploy/.env.*
+
+.git
+.github
+.data
+**/*.tsbuildinfo
+.DS_Store

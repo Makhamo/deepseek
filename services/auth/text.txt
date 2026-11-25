@@ -1,0 +1,2021 @@
+src Folder:
+auth/better-auth.ts(import type { Database } from '@uhs/service-kit';
+import { betterAuth } from 'better-auth';
+import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { jwt, organization, twoFactor } from 'better-auth/plugins';
+import type { ServiceConfig } from '../config.js';
+
+/**
+ * Better Auth owns accounts, sessions, MFA, organisations (tenants) and
+ * memberships (spec §5). Other services never import this: they verify the
+ * issued JWTs against the JWKS.
+ *
+ * The auth tables are generated with `npm run db:auth-generate` once the
+ * Better Auth schema is finalised; they live in this service's database only.
+ */
+export function createAuth(config: ServiceConfig, database: Database) {
+  return betterAuth({
+    appName: 'UHS',
+    baseURL: config.BETTER_AUTH_URL,
+    secret: config.BETTER_AUTH_SECRET,
+    database: drizzleAdapter(database.db, { provider: 'pg' }),
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: true,
+    },
+    session: {
+      expiresIn: 60 * 60 * 24 * 7,
+      updateAge: 60 * 60,
+    },
+    plugins: [
+      // A tenant is a Better Auth organisation; a facility is a team.
+      organization(),
+      // Issues the access token described in spec §5.5.
+      jwt(),
+      // MFA is mandatory for staff memberships.
+      twoFactor(),
+    ],
+    advanced: {
+      database: { generateId: false },
+    },
+  });
+}
+
+export type Auth = ReturnType<typeof createAuth>;
+)
+controllers/me.controller.ts(import type { Request, Response } from "express";
+import * as PermissionModel from "../models/permission.model.js";
+import * as StaffModel from "../models/staff.model.js";
+import * as PatientModel from "../models/patient.model.js";
+
+/**
+ * Unified identity payload for all microservices.
+ * Other services call this (or trust JWT) to know what the user can do.
+ */
+export async function getAccess(req: Request, res: Response) {
+  try {
+    const user = req.user!;
+    const role = (user.role || "patient").toLowerCase();
+    const permissions = await PermissionModel.findByRole(role);
+    const keys = permissions.map((p) => p.key);
+
+    // Group by service for portals
+    const byService: Record<string, string[]> = {};
+    for (const p of permissions) {
+      const sk = p.serviceKey || "auth";
+      if (!byService[sk]) byService[sk] = [];
+      byService[sk].push(p.key);
+    }
+
+    const staffProfile =
+      role !== "patient" ? await StaffModel.findByUserId(user.id) : null;
+    const patientProfile =
+      role === "patient" ? await PatientModel.findByUserId(user.id) : null;
+
+    res.json({
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role,
+      },
+      permissions: keys,
+      services: byService,
+      staffProfile,
+      patientProfile,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to resolve access" });
+  }
+}
+
+export async function checkPermission(req: Request, res: Response) {
+  try {
+    const needed = String(req.query.permission || req.body?.permission || "");
+    if (!needed) {
+      return res.status(400).json({ error: "permission query/body required" });
+    }
+    const role = (req.user?.role || "patient").toLowerCase();
+    const permissions = await PermissionModel.findByRole(role);
+    const allowed = permissions.some((p) => p.key === needed);
+    res.json({ permission: needed, allowed, role });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to check permission" });
+  }
+}
+)
+controllers/patient.controller.ts(import type { Request, Response } from "express";
+import * as PatientModel from "../models/patient.model.js";
+
+export async function list(_req: Request, res: Response) {
+  try {
+    const patients = await PatientModel.findAll();
+    res.json({ patients });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to list patients" });
+  }
+}
+
+export async function getMe(req: Request, res: Response) {
+  try {
+    const row = await PatientModel.findByUserId(req.user!.id);
+    if (!row) return res.status(404).json({ error: "Patient profile not found" });
+    res.json({ patientProfile: row });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to get profile" });
+  }
+}
+
+export async function upsertMe(req: Request, res: Response) {
+  try {
+    const profile = await PatientModel.upsert(req.user!.id, req.body);
+    res.status(201).json({ patientProfile: profile });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to save patient profile" });
+  }
+})
+controllers/permission.controller.ts(import type { Request, Response } from "express";
+import * as PermissionModel from "../models/permission.model.js";
+
+export async function list(_req: Request, res: Response) {
+  try {
+    const permissions = await PermissionModel.findAll();
+    res.json({ permissions });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to list permissions" });
+  }
+}
+
+export async function create(req: Request, res: Response) {
+  try {
+    const { key, name, description } = req.body;
+    if (!key || !name) {
+      return res.status(400).json({ error: "key and name are required" });
+    }
+    const created = await PermissionModel.create({ key, name, description });
+    res.status(201).json({ permission: created });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to create permission" });
+  }
+}
+
+export async function listByRole(req: Request, res: Response) {
+  try {
+    const permissions = await PermissionModel.findByRole(req.params.role);
+    res.json({ role: req.params.role, permissions });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to list role permissions" });
+  }
+}
+
+export async function assignToRole(req: Request, res: Response) {
+  try {
+    const { permissionId } = req.body;
+    if (!permissionId) {
+      return res.status(400).json({ error: "permissionId is required" });
+    }
+    const result = await PermissionModel.assignToRole(
+      req.params.role,
+      permissionId
+    );
+    res.status(201).json(result);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to assign permission" });
+  }
+}
+
+export async function seed(_req: Request, res: Response) {
+  try {
+    const result = await PermissionModel.seedDefaults();
+    res.json({ ...result, message: "Default permissions ready" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to seed permissions" });
+  }
+}
+)
+controllers/service-registry.controller.ts(import type { Request, Response } from "express";
+import * as RegistryModel from "../models/service-registry.model.js";
+
+export async function list(_req: Request, res: Response) {
+  try {
+    const services = await RegistryModel.findAll();
+    res.json({ services });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to list services" });
+  }
+}
+
+export async function seed(_req: Request, res: Response) {
+  try {
+    const result = await RegistryModel.seedRegistry();
+    res.json({ ...result, message: "Service registry ready" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to seed service registry" });
+  }
+}
+)
+controllers/service.controller.ts(import type { Request, Response } from "express";
+import * as ServiceModel from "../models/service.model.js";
+
+export async function list(_req: Request, res: Response) {
+  try {
+    const services = await ServiceModel.findAllActive();
+    res.json({ services });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to list services" });
+  }
+}
+
+export async function getById(req: Request, res: Response) {
+  try {
+    const row = await ServiceModel.findById(req.params.id);
+    if (!row) return res.status(404).json({ error: "Service not found" });
+    res.json({ service: row });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to get service" });
+  }
+}
+
+export async function create(req: Request, res: Response) {
+  try {
+    const { name, code, description, category } = req.body;
+    if (!name) return res.status(400).json({ error: "name is required" });
+    const created = await ServiceModel.create({
+      name,
+      code,
+      description,
+      category,
+    });
+    res.status(201).json({ service: created });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to create service" });
+  }
+}
+
+export async function update(req: Request, res: Response) {
+  try {
+    const updated = await ServiceModel.update(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: "Service not found" });
+    res.json({ service: updated });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to update service" });
+  }
+}
+
+export async function linkToOrg(req: Request, res: Response) {
+  try {
+    const row = await ServiceModel.linkToOrganization({
+      serviceId: req.params.serviceId,
+      organizationId: req.params.orgId,
+      price: req.body.price,
+      currency: req.body.currency,
+      isAvailable: req.body.isAvailable,
+    });
+    res.status(201).json({ organizationService: row });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to link service to organization" });
+  }
+}
+
+export async function listByOrg(req: Request, res: Response) {
+  try {
+    const services = await ServiceModel.findByOrganization(req.params.orgId);
+    res.json({ services });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to list organization services" });
+  }
+}
+)
+controllers/staff.controller.ts(import type { Request, Response } from "express";
+import * as StaffModel from "../models/staff.model.js";
+
+export async function list(_req: Request, res: Response) {
+  try {
+    const staff = await StaffModel.findAll();
+    res.json({ staff });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to list staff" });
+  }
+}
+
+export async function getByUserId(req: Request, res: Response) {
+  try {
+    const row = await StaffModel.findByUserId(req.params.userId);
+    if (!row) return res.status(404).json({ error: "Staff profile not found" });
+    res.json({ staffProfile: row });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to get staff profile" });
+  }
+}
+
+export async function upsert(req: Request, res: Response) {
+  try {
+    const { userId, ...rest } = req.body;
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+    const profile = await StaffModel.upsert({ userId, ...rest });
+    res.status(201).json({ staffProfile: profile });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to save staff profile" });
+  }
+}
+)
+
+
+src/db/auth-schema.ts(/**
+ * Better Auth table definitions (user, session, account, verification,
+ * organization, member, invitation, twoFactor) belong here.
+ *
+ * Generate them once the auth schema is finalised:
+ *
+ *   npm run db:auth-generate --workspace @uhs/auth
+ *
+ * then re-export the generated tables from ./schema.ts so drizzle-kit includes
+ * them in this service's migrations. They are intentionally absent until then:
+ * this service owns its database and no other service may depend on auth's
+ * tables.
+ */
+export {};
+)
+src/db/index.ts(import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import * as schema from "./schema.js";
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+export const db = drizzle(pool, { schema });
+
+export { pool };
+)
+src/db/schema.ts(import {
+  pgTable,
+  text,
+  timestamp,
+  boolean,
+  numeric,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
+
+/* ------------------------------------------------------------------ */
+/*  Better Auth core                                                  */
+/* ------------------------------------------------------------------ */
+
+export const user = pgTable("user", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull().unique(),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  image: text("image"),
+  role: text("role").default("patient"),
+  banned: boolean("banned").default(false),
+  banReason: text("ban_reason"),
+  banExpires: timestamp("ban_expires"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const session = pgTable("session", {
+  id: text("id").primaryKey(),
+  expiresAt: timestamp("expires_at").notNull(),
+  token: text("token").notNull().unique(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  activeOrganizationId: text("active_organization_id"),
+  impersonatedBy: text("impersonated_by"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const account = pgTable("account", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull(),
+  providerId: text("provider_id").notNull(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  idToken: text("id_token"),
+  accessTokenExpiresAt: timestamp("access_token_expires_at"),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
+  scope: text("scope"),
+  password: text("password"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const verification = pgTable("verification", {
+  id: text("id").primaryKey(),
+  identifier: text("identifier").notNull(),
+  value: text("value").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const organization = pgTable("organization", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  logo: text("logo"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  metadata: text("metadata"),
+});
+
+export const member = pgTable("member", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  role: text("role").notNull().default("member"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const invitation = pgTable("invitation", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  role: text("role"),
+  status: text("status").notNull().default("pending"),
+  expiresAt: timestamp("expires_at").notNull(),
+  inviterId: text("inviter_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/* ------------------------------------------------------------------ */
+/*  Domain                                                            */
+/* ------------------------------------------------------------------ */
+
+export const department = pgTable("department", {
+  id: text("id").primaryKey(),
+  organizationId: text("organization_id")
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const service = pgTable("service", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  code: text("code").unique(),
+  description: text("description"),
+  category: text("category"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const organizationService = pgTable(
+  "organization_service",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    serviceId: text("service_id")
+      .notNull()
+      .references(() => service.id, { onDelete: "cascade" }),
+    price: numeric("price", { precision: 12, scale: 2 }),
+    currency: text("currency").default("ZAR"),
+    isAvailable: boolean("is_available").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("org_service_uniq").on(t.organizationId, t.serviceId),
+  })
+);
+
+export const permission = pgTable("permission", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  name: text("name").notNull(),
+  description: text("description"),
+  serviceKey: text("service_key"), // appointment | lab | pharmacy | nice | triage | claims | auth
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const rolePermission = pgTable(
+  "role_permission",
+  {
+    id: text("id").primaryKey(),
+    role: text("role").notNull(),
+    permissionId: text("permission_id")
+      .notNull()
+      .references(() => permission.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("role_perm_uniq").on(t.role, t.permissionId),
+  })
+);
+
+/** Registered microservices that trust this auth hub */
+export const serviceRegistry = pgTable("service_registry", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(), // lab | appointment | pharmacy | nice | triage | claims
+  name: text("name").notNull(),
+  baseUrl: text("base_url"),
+  description: text("description"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const staffProfile = pgTable("staff_profile", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => user.id, { onDelete: "cascade" }),
+  organizationId: text("organization_id").references(() => organization.id, {
+    onDelete: "set null",
+  }),
+  departmentId: text("department_id").references(() => department.id, {
+    onDelete: "set null",
+  }),
+  specialty: text("specialty"),
+  licenseNumber: text("license_number"),
+  title: text("title"),
+  phone: text("phone"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const patientProfile = pgTable("patient_profile", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => user.id, { onDelete: "cascade" }),
+  dateOfBirth: timestamp("date_of_birth"),
+  gender: text("gender"),
+  bloodType: text("blood_type"),
+  phone: text("phone"),
+  address: text("address"),
+  emergencyContactName: text("emergency_contact_name"),
+  emergencyContactPhone: text("emergency_contact_phone"),
+  medicalAidNumber: text("medical_aid_number"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/* ------------------------------------------------------------------ */
+/*  Relations                                                         */
+/* ------------------------------------------------------------------ */
+
+export const userRelations = relations(user, ({ one, many }) => ({
+  staffProfile: one(staffProfile, {
+    fields: [user.id],
+    references: [staffProfile.userId],
+  }),
+  patientProfile: one(patientProfile, {
+    fields: [user.id],
+    references: [patientProfile.userId],
+  }),
+  memberships: many(member),
+}));
+
+export const organizationRelations = relations(organization, ({ many }) => ({
+  members: many(member),
+  departments: many(department),
+  services: many(organizationService),
+}));
+
+export const departmentRelations = relations(department, ({ one, many }) => ({
+  organization: one(organization, {
+    fields: [department.organizationId],
+    references: [organization.id],
+  }),
+  staff: many(staffProfile),
+}));
+
+export const serviceRelations = relations(service, ({ many }) => ({
+  organizations: many(organizationService),
+}));
+
+export const organizationServiceRelations = relations(
+  organizationService,
+  ({ one }) => ({
+    organization: one(organization, {
+      fields: [organizationService.organizationId],
+      references: [organization.id],
+    }),
+    service: one(service, {
+      fields: [organizationService.serviceId],
+      references: [service.id],
+    }),
+  })
+);
+
+export const permissionRelations = relations(permission, ({ many }) => ({
+  rolePermissions: many(rolePermission),
+}));
+
+export const rolePermissionRelations = relations(rolePermission, ({ one }) => ({
+  permission: one(permission, {
+    fields: [rolePermission.permissionId],
+    references: [permission.id],
+  }),
+}));
+
+export const staffProfileRelations = relations(staffProfile, ({ one }) => ({
+  user: one(user, {
+    fields: [staffProfile.userId],
+    references: [user.id],
+  }),
+  organization: one(organization, {
+    fields: [staffProfile.organizationId],
+    references: [organization.id],
+  }),
+  department: one(department, {
+    fields: [staffProfile.departmentId],
+    references: [department.id],
+  }),
+}));
+
+export const patientProfileRelations = relations(patientProfile, ({ one }) => ({
+  user: one(user, {
+    fields: [patientProfile.userId],
+    references: [user.id],
+  }),
+}));
+
+export const schema = {
+  user,
+  session,
+  account,
+  verification,
+  organization,
+  member,
+  invitation,
+  department,
+  service,
+  organizationService,
+  permission,
+  rolePermission,
+  serviceRegistry,
+  staffProfile,
+  patientProfile,
+};
+)
+src/dto/department.dto.ts(import { z } from "zod";
+
+export const CreateDepartmentDto = z.object({
+  organizationId: z.string().min(1, "organizationId is required"),
+  name: z.string().min(1, "name is required").max(200),
+  description: z.string().max(1000).optional().nullable(),
+});
+
+export const UpdateDepartmentDto = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional().nullable(),
+});
+
+export type CreateDepartmentInput = z.infer<typeof CreateDepartmentDto>;
+export type UpdateDepartmentInput = z.infer<typeof UpdateDepartmentDto>;
+)
+src/dto/index.ts(export * from "./service.dto.js";
+export * from "./organization.dto.js";
+export * from "./department.dto.js";
+export * from "./permission.dto.js";
+export * from "./staff.dto.js";
+export * from "./patient.dto.js";
+)
+src/dto/organization.dto.ts(import { z } from "zod";
+
+export const CreateOrganizationDto = z.object({
+  name: z.string().min(1, "name is required").max(200),
+  slug: z
+    .string()
+    .min(1, "slug is required")
+    .max(100)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "slug must be lowercase kebab-case"),
+  logo: z.string().url().optional().nullable(),
+  metadata: z.record(z.unknown()).optional().nullable(),
+});
+
+export const UpdateOrganizationDto = z.object({
+  name: z.string().min(1).max(200).optional(),
+  slug: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .optional(),
+  logo: z.string().url().optional().nullable(),
+  metadata: z.record(z.unknown()).optional().nullable(),
+});
+
+export type CreateOrganizationInput = z.infer<typeof CreateOrganizationDto>;
+export type UpdateOrganizationInput = z.infer<typeof UpdateOrganizationDto>;
+)
+src/dto/patient.dto.ts(import { z } from "zod";
+
+export const UpsertPatientDto = z.object({
+  dateOfBirth: z
+    .string()
+    .datetime({ offset: true })
+    .or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD or ISO datetime"))
+    .optional()
+    .nullable(),
+  gender: z.enum(["male", "female", "other", "prefer_not_to_say"]).optional().nullable(),
+  bloodType: z
+    .enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "unknown"])
+    .optional()
+    .nullable(),
+  phone: z.string().max(30).optional().nullable(),
+  address: z.string().max(500).optional().nullable(),
+  emergencyContactName: z.string().max(200).optional().nullable(),
+  emergencyContactPhone: z.string().max(30).optional().nullable(),
+  medicalAidNumber: z.string().max(100).optional().nullable(),
+});
+
+export type UpsertPatientInput = z.infer<typeof UpsertPatientDto>;
+)
+src/dto/permission.dto.ts(import { z } from "zod";
+
+export const CreatePermissionDto = z.object({
+  key: z
+    .string()
+    .min(1, "key is required")
+    .max(100)
+    .regex(
+      /^[a-z0-9]+(?::[a-z0-9]+)*$/,
+      "key must be like 'resource:action' (lowercase)"
+    ),
+  name: z.string().min(1, "name is required").max(200),
+  description: z.string().max(500).optional().nullable(),
+});
+
+export const AssignPermissionDto = z.object({
+  permissionId: z.string().min(1, "permissionId is required"),
+});
+
+export type CreatePermissionInput = z.infer<typeof CreatePermissionDto>;
+export type AssignPermissionInput = z.infer<typeof AssignPermissionDto>;
+)
+src/dto/service.dto.ts(import { z } from "zod";
+
+export const CreateServiceDto = z.object({
+  name: z.string().min(1, "name is required").max(200),
+  code: z.string().max(50).optional().nullable(),
+  description: z.string().max(2000).optional().nullable(),
+  category: z
+    .enum(["consultation", "lab", "pharmacy", "procedure", "imaging", "other"])
+    .optional()
+    .nullable(),
+});
+
+export const UpdateServiceDto = z.object({
+  name: z.string().min(1).max(200).optional(),
+  code: z.string().max(50).optional().nullable(),
+  description: z.string().max(2000).optional().nullable(),
+  category: z
+    .enum(["consultation", "lab", "pharmacy", "procedure", "imaging", "other"])
+    .optional()
+    .nullable(),
+  isActive: z.boolean().optional(),
+});
+
+export const LinkServiceToOrgDto = z.object({
+  price: z
+    .union([z.string(), z.number()])
+    .optional()
+    .nullable()
+    .transform((v) => (v === undefined || v === null ? null : String(v))),
+  currency: z.string().length(3).default("ZAR").optional(),
+  isAvailable: z.boolean().optional(),
+});
+
+export type CreateServiceInput = z.infer<typeof CreateServiceDto>;
+export type UpdateServiceInput = z.infer<typeof UpdateServiceDto>;
+export type LinkServiceToOrgInput = z.infer<typeof LinkServiceToOrgDto>;
+)
+src/dto/staff.dto.ts(import { z } from "zod";
+
+export const UpsertStaffDto = z.object({
+  userId: z.string().min(1, "userId is required"),
+  organizationId: z.string().min(1).optional().nullable(),
+  departmentId: z.string().min(1).optional().nullable(),
+  specialty: z.string().max(200).optional().nullable(),
+  licenseNumber: z.string().max(100).optional().nullable(),
+  title: z.string().max(100).optional().nullable(),
+  phone: z.string().max(30).optional().nullable(),
+});
+
+export type UpsertStaffInput = z.infer<typeof UpsertStaffDto>;
+)
+
+
+src/middleware/auth.ts(import type { Request, Response, NextFunction } from "express";
+import { auth } from "../auth.js";
+
+export type SessionUser = {
+  id: string;
+  name: string;
+  email: string;
+  role?: string | null;
+  [key: string]: unknown;
+};
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: SessionUser;
+      session?: unknown;
+    }
+  }
+}
+
+export async function requireAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const session = await auth.api.getSession({
+      headers: req.headers as any,
+    });
+    if (!session?.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    req.user = session.user as SessionUser;
+    req.session = session.session;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+}
+
+export function requireRoles(...roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const role = (req.user?.role || "").toLowerCase();
+    if (!roles.map((r) => r.toLowerCase()).includes(role)) {
+      return res.status(403).json({
+        error: "Forbidden",
+        message: `Requires one of: ${roles.join(", ")}`,
+      });
+    }
+    next();
+  };
+}
+
+export const requireAdmin = requireRoles("admin", "superadmin");
+
+export const requireStaff = requireRoles(
+  "doctor",
+  "pharmacist",
+  "nurse",
+  "labtech",
+  "admin",
+  "superadmin"
+);
+)
+src/middleware/validate.ts(import type { Request, Response, NextFunction } from "express";
+import type { ZodSchema, ZodError } from "zod";
+
+type Target = "body" | "query" | "params";
+
+/**
+ * Validate req.body / req.query / req.params against a Zod schema.
+ * On failure returns 400 with field-level errors.
+ */
+export function validate(schema: ZodSchema, target: Target = "body") {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const result = schema.safeParse(req[target]);
+
+    if (!result.success) {
+      const error = result.error as ZodError;
+      return res.status(400).json({
+        error: "Validation failed",
+        details: error.errors.map((e) => ({
+          path: e.path.join("."),
+          message: e.message,
+        })),
+      });
+    }
+
+    // Replace with parsed (coerced / stripped) data
+    req[target] = result.data;
+    next();
+  };
+}
+)
+src/models/department.model.ts(import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db } from "../db/index.js";
+import { department } from "../db/schema.js";
+
+export async function findById(id: string) {
+  const [row] = await db
+    .select()
+    .from(department)
+    .where(eq(department.id, id));
+  return row ?? null;
+}
+
+export async function create(data: {
+  organizationId: string;
+  name: string;
+  description?: string | null;
+}) {
+  const id = randomUUID();
+  await db.insert(department).values({
+    id,
+    organizationId: data.organizationId,
+    name: data.name,
+    description: data.description ?? null,
+  });
+  return findById(id);
+}
+
+export async function update(
+  id: string,
+  data: Partial<{ name: string; description: string | null }>
+) {
+  await db
+    .update(department)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(department.id, id));
+  return findById(id);
+}
+)
+src/models/organization.model.ts(import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db } from "../db/index.js";
+import { organization, member, department, user } from "../db/schema.js";
+
+export async function findAll() {
+  return db.select().from(organization);
+}
+
+export async function findById(id: string) {
+  const [row] = await db
+    .select()
+    .from(organization)
+    .where(eq(organization.id, id));
+  return row ?? null;
+}
+
+export async function create(data: {
+  name: string;
+  slug: string;
+  logo?: string | null;
+  metadata?: unknown;
+}) {
+  const id = randomUUID();
+  await db.insert(organization).values({
+    id,
+    name: data.name,
+    slug: data.slug,
+    logo: data.logo ?? null,
+    metadata: data.metadata
+      ? typeof data.metadata === "string"
+        ? data.metadata
+        : JSON.stringify(data.metadata)
+      : null,
+  });
+  return findById(id);
+}
+
+export async function update(
+  id: string,
+  data: Partial<{
+    name: string;
+    slug: string;
+    logo: string | null;
+    metadata: unknown;
+  }>
+) {
+  const set: Record<string, unknown> = {};
+  if (data.name !== undefined) set.name = data.name;
+  if (data.slug !== undefined) set.slug = data.slug;
+  if (data.logo !== undefined) set.logo = data.logo;
+  if (data.metadata !== undefined) {
+    set.metadata =
+      typeof data.metadata === "string"
+        ? data.metadata
+        : JSON.stringify(data.metadata);
+  }
+  await db.update(organization).set(set).where(eq(organization.id, id));
+  return findById(id);
+}
+
+export async function findMembers(orgId: string) {
+  return db
+    .select({
+      memberId: member.id,
+      role: member.role,
+      joinedAt: member.createdAt,
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      userRole: user.role,
+    })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(eq(member.organizationId, orgId));
+}
+
+export async function findDepartments(orgId: string) {
+  return db
+    .select()
+    .from(department)
+    .where(eq(department.organizationId, orgId));
+}
+)
+src/models/patient.model.ts(import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db } from "../db/index.js";
+import { patientProfile, user } from "../db/schema.js";
+
+export async function findAll() {
+  return db
+    .select({
+      id: patientProfile.id,
+      userId: patientProfile.userId,
+      dateOfBirth: patientProfile.dateOfBirth,
+      gender: patientProfile.gender,
+      bloodType: patientProfile.bloodType,
+      phone: patientProfile.phone,
+      address: patientProfile.address,
+      medicalAidNumber: patientProfile.medicalAidNumber,
+      name: user.name,
+      email: user.email,
+    })
+    .from(patientProfile)
+    .innerJoin(user, eq(patientProfile.userId, user.id));
+}
+
+export async function findByUserId(userId: string) {
+  const [row] = await db
+    .select()
+    .from(patientProfile)
+    .where(eq(patientProfile.userId, userId));
+  return row ?? null;
+}
+
+export async function upsert(
+  userId: string,
+  data: {
+    dateOfBirth?: string | Date | null;
+    gender?: string | null;
+    bloodType?: string | null;
+    phone?: string | null;
+    address?: string | null;
+    emergencyContactName?: string | null;
+    emergencyContactPhone?: string | null;
+    medicalAidNumber?: string | null;
+  }
+) {
+  const existing = await findByUserId(userId);
+  const dob = data.dateOfBirth ? new Date(data.dateOfBirth) : null;
+
+  if (existing) {
+    await db
+      .update(patientProfile)
+      .set({
+        dateOfBirth: dob ?? existing.dateOfBirth,
+        gender: data.gender ?? existing.gender,
+        bloodType: data.bloodType ?? existing.bloodType,
+        phone: data.phone ?? existing.phone,
+        address: data.address ?? existing.address,
+        emergencyContactName:
+          data.emergencyContactName ?? existing.emergencyContactName,
+        emergencyContactPhone:
+          data.emergencyContactPhone ?? existing.emergencyContactPhone,
+        medicalAidNumber: data.medicalAidNumber ?? existing.medicalAidNumber,
+        updatedAt: new Date(),
+      })
+      .where(eq(patientProfile.userId, userId));
+    return findByUserId(userId);
+  }
+
+  const id = randomUUID();
+  await db.insert(patientProfile).values({
+    id,
+    userId,
+    dateOfBirth: dob,
+    gender: data.gender ?? null,
+    bloodType: data.bloodType ?? null,
+    phone: data.phone ?? null,
+    address: data.address ?? null,
+    emergencyContactName: data.emergencyContactName ?? null,
+    emergencyContactPhone: data.emergencyContactPhone ?? null,
+    medicalAidNumber: data.medicalAidNumber ?? null,
+  });
+  return findByUserId(userId);
+}
+)
+src/models/permission.model.ts(import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db } from "../db/index.js";
+import { permission, rolePermission } from "../db/schema.js";
+
+export async function findAll() {
+  return db.select().from(permission);
+}
+
+export async function findById(id: string) {
+  const [row] = await db
+    .select()
+    .from(permission)
+    .where(eq(permission.id, id));
+  return row ?? null;
+}
+
+export async function findByKey(key: string) {
+  const [row] = await db
+    .select()
+    .from(permission)
+    .where(eq(permission.key, key));
+  return row ?? null;
+}
+
+export async function create(data: {
+  key: string;
+  name: string;
+  description?: string | null;
+  serviceKey?: string | null;
+}) {
+  const id = randomUUID();
+  await db.insert(permission).values({
+    id,
+    key: data.key,
+    name: data.name,
+    description: data.description ?? null,
+    serviceKey: data.serviceKey ?? null,
+  });
+  return findById(id);
+}
+
+export async function findByRole(role: string) {
+  return db
+    .select({
+      id: permission.id,
+      key: permission.key,
+      name: permission.name,
+      description: permission.description,
+      serviceKey: permission.serviceKey,
+    })
+    .from(rolePermission)
+    .innerJoin(permission, eq(rolePermission.permissionId, permission.id))
+    .where(eq(rolePermission.role, role.toLowerCase()));
+}
+
+export async function assignToRole(role: string, permissionId: string) {
+  const id = randomUUID();
+  await db.insert(rolePermission).values({
+    id,
+    role: role.toLowerCase(),
+    permissionId,
+  });
+  return { id, role: role.toLowerCase(), permissionId };
+}
+
+/** Full healthcare multi-service permission catalog + role matrix */
+export async function seedDefaults() {
+  const catalog: Array<{
+    key: string;
+    name: string;
+    serviceKey: string;
+  }> = [
+    // Auth / platform
+    { key: "auth:session", name: "Use session", serviceKey: "auth" },
+    { key: "auth:admin", name: "Admin console", serviceKey: "auth" },
+
+    // Appointment
+    { key: "appointment:read", name: "View appointments", serviceKey: "appointment" },
+    { key: "appointment:book", name: "Book appointments", serviceKey: "appointment" },
+    { key: "appointment:manage", name: "Manage all appointments", serviceKey: "appointment" },
+    { key: "appointment:cancel", name: "Cancel appointments", serviceKey: "appointment" },
+
+    // Lab
+    { key: "lab:orders:read", name: "View lab orders", serviceKey: "lab" },
+    { key: "lab:orders:create", name: "Create lab orders", serviceKey: "lab" },
+    { key: "lab:results:read", name: "View lab results", serviceKey: "lab" },
+    { key: "lab:results:write", name: "Enter lab results", serviceKey: "lab" },
+
+    // Pharmacy
+    { key: "pharmacy:prescriptions:read", name: "View prescriptions", serviceKey: "pharmacy" },
+    { key: "pharmacy:prescriptions:write", name: "Write prescriptions", serviceKey: "pharmacy" },
+    { key: "pharmacy:dispense", name: "Dispense medication", serviceKey: "pharmacy" },
+    { key: "pharmacy:inventory", name: "Manage pharmacy inventory", serviceKey: "pharmacy" },
+
+    // NICE (clinical / NICU notes & care)
+    { key: "nice:read", name: "View clinical notes", serviceKey: "nice" },
+    { key: "nice:write", name: "Write clinical notes", serviceKey: "nice" },
+    { key: "nice:manage", name: "Manage NICE records", serviceKey: "nice" },
+
+    // Triage
+    { key: "triage:read", name: "View triage cases", serviceKey: "triage" },
+    { key: "triage:assess", name: "Perform triage assessment", serviceKey: "triage" },
+    { key: "triage:manage", name: "Manage triage queue", serviceKey: "triage" },
+
+    // Claims
+    { key: "claims:read", name: "View claims", serviceKey: "claims" },
+    { key: "claims:submit", name: "Submit claims", serviceKey: "claims" },
+    { key: "claims:manage", name: "Manage claims workflow", serviceKey: "claims" },
+
+    // Patients (cross-cutting)
+    { key: "patients:read", name: "View patients", serviceKey: "auth" },
+    { key: "patients:write", name: "Update patient demographics", serviceKey: "auth" },
+    { key: "patients:self", name: "Manage own patient profile", serviceKey: "auth" },
+
+    // Staff / org
+    { key: "staff:read", name: "View staff", serviceKey: "auth" },
+    { key: "staff:write", name: "Manage staff", serviceKey: "auth" },
+    { key: "organizations:read", name: "View organizations", serviceKey: "auth" },
+    { key: "organizations:write", name: "Manage organizations", serviceKey: "auth" },
+    { key: "services:read", name: "View service catalog", serviceKey: "auth" },
+    { key: "services:write", name: "Manage service catalog", serviceKey: "auth" },
+  ];
+
+  const created: string[] = [];
+  for (const p of catalog) {
+    const existing = await findByKey(p.key);
+    if (!existing) {
+      await create(p);
+      created.push(p.key);
+    }
+  }
+
+  const allPerms = await findAll();
+  const byKey = Object.fromEntries(allPerms.map((p) => [p.key, p.id]));
+
+  const roleMap: Record<string, string[]> = {
+    patient: [
+      "auth:session",
+      "patients:self",
+      "appointment:read",
+      "appointment:book",
+      "appointment:cancel",
+      "lab:results:read",
+      "pharmacy:prescriptions:read",
+      "claims:read",
+      "claims:submit",
+      "services:read",
+    ],
+    doctor: [
+      "auth:session",
+      "patients:read",
+      "patients:write",
+      "appointment:read",
+      "appointment:book",
+      "appointment:manage",
+      "appointment:cancel",
+      "lab:orders:read",
+      "lab:orders:create",
+      "lab:results:read",
+      "pharmacy:prescriptions:read",
+      "pharmacy:prescriptions:write",
+      "nice:read",
+      "nice:write",
+      "triage:read",
+      "triage:assess",
+      "claims:read",
+      "claims:submit",
+      "services:read",
+      "staff:read",
+      "organizations:read",
+    ],
+    nurse: [
+      "auth:session",
+      "patients:read",
+      "patients:write",
+      "appointment:read",
+      "appointment:book",
+      "lab:orders:read",
+      "lab:results:read",
+      "pharmacy:prescriptions:read",
+      "nice:read",
+      "nice:write",
+      "triage:read",
+      "triage:assess",
+      "triage:manage",
+      "services:read",
+    ],
+    pharmacist: [
+      "auth:session",
+      "patients:read",
+      "pharmacy:prescriptions:read",
+      "pharmacy:prescriptions:write",
+      "pharmacy:dispense",
+      "pharmacy:inventory",
+      "services:read",
+    ],
+    labtech: [
+      "auth:session",
+      "patients:read",
+      "lab:orders:read",
+      "lab:results:read",
+      "lab:results:write",
+      "services:read",
+    ],
+    admin: Object.keys(byKey),
+    superadmin: Object.keys(byKey),
+  };
+
+  for (const [role, keys] of Object.entries(roleMap)) {
+    const existingForRole = await db
+      .select()
+      .from(rolePermission)
+      .where(eq(rolePermission.role, role));
+    const existingIds = new Set(existingForRole.map((r) => r.permissionId));
+
+    for (const key of keys) {
+      const permissionId = byKey[key];
+      if (!permissionId || existingIds.has(permissionId)) continue;
+      await assignToRole(role, permissionId);
+    }
+  }
+
+  return { seeded: created, roles: Object.keys(roleMap) };
+}
+)
+src/models/service-registry.model.ts(import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db } from "../db/index.js";
+import { serviceRegistry } from "../db/schema.js";
+
+export async function findAll() {
+  return db.select().from(serviceRegistry).where(eq(serviceRegistry.isActive, true));
+}
+
+export async function findByKey(key: string) {
+  const [row] = await db
+    .select()
+    .from(serviceRegistry)
+    .where(eq(serviceRegistry.key, key));
+  return row ?? null;
+}
+
+export async function upsert(data: {
+  key: string;
+  name: string;
+  baseUrl?: string | null;
+  description?: string | null;
+}) {
+  const existing = await findByKey(data.key);
+  if (existing) {
+    await db
+      .update(serviceRegistry)
+      .set({
+        name: data.name,
+        baseUrl: data.baseUrl ?? existing.baseUrl,
+        description: data.description ?? existing.description,
+        updatedAt: new Date(),
+      })
+      .where(eq(serviceRegistry.key, data.key));
+    return findByKey(data.key);
+  }
+  const id = randomUUID();
+  await db.insert(serviceRegistry).values({
+    id,
+    key: data.key,
+    name: data.name,
+    baseUrl: data.baseUrl ?? null,
+    description: data.description ?? null,
+  });
+  return findByKey(data.key);
+}
+
+export async function seedRegistry() {
+  const services = [
+    {
+      key: "auth",
+      name: "Auth Hub",
+      description: "Central identity, roles, permissions, organizations",
+    },
+    {
+      key: "appointment",
+      name: "Book Appointment",
+      description: "Scheduling and appointments",
+    },
+    {
+      key: "lab",
+      name: "Laboratory",
+      description: "Lab orders and results",
+    },
+    {
+      key: "pharmacy",
+      name: "Pharmacy",
+      description: "Prescriptions, dispensing, inventory",
+    },
+    {
+      key: "nice",
+      name: "NICE",
+      description: "Clinical notes and care pathways",
+    },
+    {
+      key: "triage",
+      name: "Triage",
+      description: "Triage assessments and queue",
+    },
+    {
+      key: "claims",
+      name: "Claims",
+      description: "Medical aid / insurance claims",
+    },
+  ];
+
+  const created: string[] = [];
+  for (const s of services) {
+    const before = await findByKey(s.key);
+    await upsert(s);
+    if (!before) created.push(s.key);
+  }
+  return { seeded: created };
+}
+)
+src/models/service.model.ts(import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db } from "../db/index.js";
+import { service, organizationService } from "../db/schema.js";
+
+export async function findAllActive() {
+  return db.select().from(service).where(eq(service.isActive, true));
+}
+
+export async function findById(id: string) {
+  const [row] = await db.select().from(service).where(eq(service.id, id));
+  return row ?? null;
+}
+
+export async function create(data: {
+  name: string;
+  code?: string | null;
+  description?: string | null;
+  category?: string | null;
+}) {
+  const id = randomUUID();
+  await db.insert(service).values({
+    id,
+    name: data.name,
+    code: data.code ?? null,
+    description: data.description ?? null,
+    category: data.category ?? null,
+  });
+  return findById(id);
+}
+
+export async function update(
+  id: string,
+  data: Partial<{
+    name: string;
+    code: string | null;
+    description: string | null;
+    category: string | null;
+    isActive: boolean;
+  }>
+) {
+  await db
+    .update(service)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(service.id, id));
+  return findById(id);
+}
+
+export async function linkToOrganization(data: {
+  organizationId: string;
+  serviceId: string;
+  price?: string | null;
+  currency?: string;
+  isAvailable?: boolean;
+}) {
+  const id = randomUUID();
+  await db.insert(organizationService).values({
+    id,
+    organizationId: data.organizationId,
+    serviceId: data.serviceId,
+    price: data.price ?? null,
+    currency: data.currency || "ZAR",
+    isAvailable: data.isAvailable !== false,
+  });
+  const [row] = await db
+    .select()
+    .from(organizationService)
+    .where(eq(organizationService.id, id));
+  return row;
+}
+
+export async function findByOrganization(orgId: string) {
+  return db
+    .select({
+      id: organizationService.id,
+      price: organizationService.price,
+      currency: organizationService.currency,
+      isAvailable: organizationService.isAvailable,
+      serviceId: service.id,
+      name: service.name,
+      code: service.code,
+      category: service.category,
+      description: service.description,
+    })
+    .from(organizationService)
+    .innerJoin(service, eq(organizationService.serviceId, service.id))
+    .where(eq(organizationService.organizationId, orgId));
+}
+)
+src/models/staff.model.ts(import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db } from "../db/index.js";
+import { staffProfile, user } from "../db/schema.js";
+
+export async function findAll() {
+  return db
+    .select({
+      id: staffProfile.id,
+      userId: staffProfile.userId,
+      organizationId: staffProfile.organizationId,
+      departmentId: staffProfile.departmentId,
+      specialty: staffProfile.specialty,
+      licenseNumber: staffProfile.licenseNumber,
+      title: staffProfile.title,
+      phone: staffProfile.phone,
+      isActive: staffProfile.isActive,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    })
+    .from(staffProfile)
+    .innerJoin(user, eq(staffProfile.userId, user.id));
+}
+
+export async function findByUserId(userId: string) {
+  const [row] = await db
+    .select()
+    .from(staffProfile)
+    .where(eq(staffProfile.userId, userId));
+  return row ?? null;
+}
+
+export async function upsert(data: {
+  userId: string;
+  organizationId?: string | null;
+  departmentId?: string | null;
+  specialty?: string | null;
+  licenseNumber?: string | null;
+  title?: string | null;
+  phone?: string | null;
+}) {
+  const existing = await findByUserId(data.userId);
+
+  if (existing) {
+    await db
+      .update(staffProfile)
+      .set({
+        organizationId: data.organizationId ?? existing.organizationId,
+        departmentId: data.departmentId ?? existing.departmentId,
+        specialty: data.specialty ?? existing.specialty,
+        licenseNumber: data.licenseNumber ?? existing.licenseNumber,
+        title: data.title ?? existing.title,
+        phone: data.phone ?? existing.phone,
+        updatedAt: new Date(),
+      })
+      .where(eq(staffProfile.userId, data.userId));
+    return findByUserId(data.userId);
+  }
+
+  const id = randomUUID();
+  await db.insert(staffProfile).values({
+    id,
+    userId: data.userId,
+    organizationId: data.organizationId ?? null,
+    departmentId: data.departmentId ?? null,
+    specialty: data.specialty ?? null,
+    licenseNumber: data.licenseNumber ?? null,
+    title: data.title ?? null,
+    phone: data.phone ?? null,
+  });
+  return findByUserId(data.userId);
+}
+)
+src/routes/department.routes.ts(import { Router } from "express";
+import * as DepartmentController from "../controllers/department.controller.js";
+import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import {
+  CreateDepartmentDto,
+  UpdateDepartmentDto,
+} from "../dto/department.dto.js";
+
+const router = Router();
+
+router.post(
+  "/",
+  requireAuth,
+  requireAdmin,
+  validate(CreateDepartmentDto),
+  DepartmentController.create
+);
+
+router.get("/:id", requireAuth, DepartmentController.getById);
+
+router.patch(
+  "/:id",
+  requireAuth,
+  requireAdmin,
+  validate(UpdateDepartmentDto),
+  DepartmentController.update
+);
+
+export default router;
+)
+src/routes/me.routes.ts(import { Router } from "express";
+import * as MeController from "../controllers/me.controller.js";
+import { requireAuth } from "../middleware/auth.js";
+
+const router = Router();
+
+router.get("/access", requireAuth, MeController.getAccess);
+router.get("/check", requireAuth, MeController.checkPermission);
+router.post("/check", requireAuth, MeController.checkPermission);
+
+export default router;
+)
+src/routes/organization.routes.ts(import { Router } from "express";
+import * as OrgController from "../controllers/organization.controller.js";
+import { requireAuth, requireAdmin } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import {
+  CreateOrganizationDto,
+  UpdateOrganizationDto,
+} from "../dto/organization.dto.js";
+
+const router = Router();
+
+router.get("/", requireAuth, OrgController.list);
+router.get("/:id", requireAuth, OrgController.getById);
+
+router.post(
+  "/",
+  requireAuth,
+  requireAdmin,
+  validate(CreateOrganizationDto),
+  OrgController.create
+);
+
+router.patch(
+  "/:id",
+  requireAuth,
+  requireAdmin,
+  validate(UpdateOrganizationDto),
+  OrgController.update
+);
+
+router.get("/:id/members", requireAuth, OrgController.listMembers);
+router.get("/:id/departments", requireAuth, OrgController.listDepartments);
+
+export default router;
+)
+src/routes/patient.routes.ts(import { Router } from "express";
+import * as PatientController from "../controllers/patient.controller.js";
+import { requireAuth, requireStaff } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import { UpsertPatientDto } from "../dto/patient.dto.js";
+
+const router = Router();
+
+router.get("/", requireAuth, requireStaff, PatientController.list);
+router.get("/me", requireAuth, PatientController.getMe);
+
+router.post(
+  "/me",
+  requireAuth,
+  validate(UpsertPatientDto),
+  PatientController.upsertMe
+);
+
+export default router;
+)
+src/routes/staff.routes.ts(import { Router } from "express";
+import * as StaffController from "../controllers/staff.controller.js";
+import { requireAuth, requireAdmin, requireStaff } from "../middleware/auth.js";
+import { validate } from "../middleware/validate.js";
+import { UpsertStaffDto } from "../dto/staff.dto.js";
+
+const router = Router();
+
+router.get("/", requireAuth, requireStaff, StaffController.list);
+router.get("/user/:userId", requireAuth, StaffController.getByUserId);
+
+router.post(
+  "/",
+  requireAuth,
+  requireAdmin,
+  validate(UpsertStaffDto),
+  StaffController.upsert
+);
+
+export default router;
+)
+
+src/auth.ts(import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { organization, jwt, admin } from "better-auth/plugins";
+import { createAccessControl } from "better-auth/plugins/access";
+import { defaultStatements, adminAc } from "better-auth/plugins/admin/access";
+import { db } from "./db/index.js";
+import { schema } from "./db/schema.js";
+
+const statement = {
+  ...defaultStatements,
+} as const;
+
+const ac = createAccessControl(statement);
+
+const patientRole = ac.newRole({});
+const doctorRole = ac.newRole({});
+const pharmacistRole = ac.newRole({});
+const nurseRole = ac.newRole({});
+const labTechRole = ac.newRole({});
+const adminRole = ac.newRole({ ...adminAc.statements });
+const superadminRole = ac.newRole({ ...adminAc.statements });
+
+export const auth = betterAuth({
+  appName: "Auth API",
+  baseURL: process.env.BETTER_AUTH_URL || "http://localhost:4001",
+  secret: process.env.BETTER_AUTH_SECRET!,
+  database: drizzleAdapter(db, {
+    provider: "pg",
+    schema,
+  }),
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: false,
+    minPasswordLength: 8,
+  },
+  session: {
+    expiresIn: 60 * 60 * 24 * 7,
+    updateAge: 60 * 60,
+  },
+  plugins: [
+    organization({
+      allowUserToCreateOrganization: true,
+      organizationLimit: 10,
+      membershipLimit: 100,
+      creatorRole: "owner",
+    }),
+    jwt({
+      jwt: {
+        expirationTime: "15m",
+      },
+    }),
+    admin({
+      defaultRole: "patient",
+      adminRoles: ["admin", "superadmin"],
+      ac,
+      roles: {
+        patient: patientRole,
+        doctor: doctorRole,
+        pharmacist: pharmacistRole,
+        nurse: nurseRole,
+        labtech: labTechRole,
+        admin: adminRole,
+        superadmin: superadminRole,
+      },
+    }),
+  ],
+  // Public sign-up is always a patient
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => {
+          return {
+            data: {
+              ...user,
+              role: "patient",
+            },
+          };
+        },
+      },
+    },
+  },
+  trustedOrigins: (process.env.CORS_ORIGINS || "http://localhost:3000").split(","),
+  advanced: {
+    database: {
+      generateId: false,
+    },
+  },
+});
+
+export type Auth = typeof auth;
+)
+src/index.ts(import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import helmet from "helmet";
+import morgan from "morgan";
+import cookieParser from "cookie-parser";
+import http from "http";
+import { toNodeHandler } from "better-auth/node";
+import { auth } from "./auth.js";
+import { Router, type ErrorRequestHandler } from "express";
+import serviceRoutes from "./routes/service.routes.js";
+import organizationRoutes from "./routes/organization.routes.js";
+import departmentRoutes from "./routes/department.routes.js";
+import permissionRoutes from "./routes/permission.routes.js";
+import staffRoutes from "./routes/staff.routes.js";
+import patientRoutes from "./routes/patient.routes.js";
+import registryRoutes from "./routes/service-registry.routes.js";
+import meRoutes from "./routes/me.routes.js";
+
+dotenv.config();
+
+if (!process.env.BETTER_AUTH_SECRET) {
+  console.error("FATAL: BETTER_AUTH_SECRET is not set");
+  process.exit(1);
+}
+if (!process.env.DATABASE_URL) {
+  console.error("FATAL: DATABASE_URL is not set");
+  process.exit(1);
+}
+
+const app = express();
+const PORT = Number(process.env.PORT) || 4001;
+
+/* ------------------------------------------------------------------ */
+/*  Domain router (inlined from routes/index.js)                      */
+/* ------------------------------------------------------------------ */
+
+const apiRoutes = Router();
+apiRoutes.use("/services", serviceRoutes);
+apiRoutes.use("/organizations", organizationRoutes);
+apiRoutes.use("/departments", departmentRoutes);
+apiRoutes.use("/permissions", permissionRoutes);
+apiRoutes.use("/staff", staffRoutes);
+apiRoutes.use("/patients", patientRoutes);
+apiRoutes.use("/registry", registryRoutes);
+apiRoutes.use("/me", meRoutes);
+
+/* ------------------------------------------------------------------ */
+/*  Security & logging                                                */
+/* ------------------------------------------------------------------ */
+
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+app.use(cookieParser());
+
+const allowedOrigins = (
+  process.env.CORS_ORIGINS ||
+  process.env.CLIENT_URL ||
+  process.env.APP_URL ||
+  "http://localhost:3000,http://localhost:5173,http://localhost:5174"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        process.env.NODE_ENV !== "production"
+      ) {
+        cb(null, true);
+      } else {
+        cb(new Error(`CORS blocked: ${origin}`));
+      }
+    },
+    credentials: true,
+  })
+);
+
+/* ------------------------------------------------------------------ */
+/*  Better Auth — MUST be before express.json()                       */
+/* ------------------------------------------------------------------ */
+
+app.all("/api/auth/*", toNodeHandler(auth));
+app.all("/auth/*", toNodeHandler(auth));
+
+/* ------------------------------------------------------------------ */
+/*  Body parsers (after Better Auth handler)                          */
+/* ------------------------------------------------------------------ */
+
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: false }));
+
+/* ------------------------------------------------------------------ */
+/*  Health                                                            */
+/* ------------------------------------------------------------------ */
+
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "unitac-auth-hub",
+    time: new Date().toISOString(),
+  });
+});
+
+app.get("/health/live", (_req, res) => {
+  res.json({ status: "live", service: "unitac-auth-hub" });
+});
+
+app.get("/", (_req, res) => {
+  res.json({
+    name: "Unitac Auth Hub",
+    version: "3.1.0",
+    role: "Central identity & authorization for all healthcare services",
+    endpoints: {
+      health: "/health",
+      auth: "/api/auth/*",
+      meAccess: "/api/me/access",
+      meCheck: "/api/me/check?permission=appointment:book",
+      permissions: "/api/permissions",
+      registry: "/api/registry",
+      organizations: "/api/organizations",
+      staff: "/api/staff",
+      patients: "/api/patients",
+      jwks: "/api/auth/jwks",
+    },
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Domain API                                                        */
+/* ------------------------------------------------------------------ */
+
+app.use("/api", apiRoutes);
+
+/* ------------------------------------------------------------------ */
+/*  404 + error handler                                               */
+/* ------------------------------------------------------------------ */
+
+app.use((_req, res) => {
+  res.status(404).json({ message: "Not found" });
+});
+
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  console.error(err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    message: err.message || "Internal server error",
+  });
+};
+app.use(errorHandler);
+
+/* ------------------------------------------------------------------ */
+/*  Start                                                             */
+/* ------------------------------------------------------------------ */
+
+const httpServer = http.createServer(app);
+
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`Auth Hub running on port ${PORT}`);
+  console.log(`  Auth:     http://localhost:${PORT}/api/auth`);
+  console.log(`  JWKS:     http://localhost:${PORT}/api/auth/jwks`);
+  console.log(`  Me:       http://localhost:${PORT}/api/me/access`);
+  console.log(`  Health:   http://localhost:${PORT}/health`);
+});)
+.env(PORT=4001
+DATABASE_URL=postgresql://neondb_owner:npg_ceJ2U8GERNqM@ep-mute-wave-bdetdx1a-pooler.c-8.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+BETTER_AUTH_SECRET=nAWf9pByhKakN24S4DjogNzqBhkcW2wrXANavwUMRUs=
+BETTER_AUTH_URL=http://localhost:4001
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+)

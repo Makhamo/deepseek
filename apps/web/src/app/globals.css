@@ -1,0 +1,612 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --surface: 255 255 255;
+  --foreground: 22 35 46;
+}
+
+html[data-theme='dark'] {
+  --surface: 11 18 32;
+  --foreground: 231 237 247;
+}
+
+.platform-shell {
+  transition: background-color 250ms ease, color 250ms ease;
+}
+
+.platform-shell a,
+.platform-shell button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.workspace-card img {
+  transition: transform 650ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.integration-card {
+  min-width: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+body {
+  background-color: rgb(var(--surface));
+  color: rgb(var(--foreground));
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.platform-shell h1,
+.platform-shell h2,
+.platform-shell h3 {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  text-wrap: balance;
+}
+
+.platform-shell p,
+.platform-shell a,
+.platform-shell button,
+.platform-shell li,
+.platform-shell dt,
+.platform-shell dd {
+  text-wrap: pretty;
+}
+
+.hero-section {
+  background:
+    radial-gradient(ellipse 46% 88% at 82% 48%, rgba(86, 139, 218, 0.2), transparent 74%),
+    radial-gradient(ellipse 44% 88% at 2% 2%, rgba(255, 255, 255, 0.96), transparent 78%),
+    linear-gradient(118deg, #f9fbff 0%, #f0f5fd 48%, #e8f0fc 100%);
+  background-size: 150% 150%, 150% 150%, 150% 150%;
+  animation: hero-background-drift 24s ease-in-out infinite alternate;
+}
+
+@keyframes hero-background-drift {
+  from {
+    background-position: 18% 36%, 82% 24%, 0% 0%;
+  }
+  to {
+    background-position: 62% 64%, 38% 76%, 0% 0%;
+  }
+}
+
+.hero-grid {
+  background-image:
+    linear-gradient(rgba(37, 99, 235, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.04) 1px, transparent 1px),
+    repeating-radial-gradient(ellipse at 78% 48%, transparent 0 54px, rgba(42, 99, 177, 0.075) 55px 56px, transparent 57px 112px);
+  background-size: 44px 44px, 44px 44px, 100% 100%;
+  mask-image: radial-gradient(ellipse 68% 92% at 78% 48%, black 0%, transparent 100%);
+}
+
+.hero-sparkle {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  color: rgba(49, 108, 187, 0.72);
+  background: currentColor;
+  clip-path: polygon(50% 0%, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0% 50%, 39% 39%);
+  filter: drop-shadow(0 0 3px currentColor);
+  animation: hero-sparkle-twinkle 5.8s ease-in-out infinite;
+}
+
+.hero-sparkle:nth-child(1) {
+  top: 18%;
+  left: 62%;
+  animation-delay: -1s;
+}
+
+.hero-sparkle:nth-child(2) {
+  top: 32%;
+  left: 88%;
+  width: 5px;
+  height: 5px;
+  animation-delay: -3.2s;
+}
+
+.hero-sparkle:nth-child(3) {
+  top: 68%;
+  left: 76%;
+  width: 8px;
+  height: 8px;
+  animation-delay: -2s;
+}
+
+.hero-sparkle:nth-child(4) {
+  top: 79%;
+  left: 52%;
+  width: 6px;
+  height: 6px;
+  animation-delay: -4s;
+}
+
+.hero-sparkle:nth-child(5) {
+  top: 52%;
+  left: 96%;
+  width: 5px;
+  height: 5px;
+  animation-delay: -2.7s;
+}
+
+.hero-sparkle:nth-child(6) {
+  top: 44%;
+  left: 66%;
+  width: 6px;
+  height: 6px;
+  animation-delay: -4.8s;
+}
+
+.hero-sparkle:nth-child(7) {
+  top: 24%;
+  left: 74%;
+  width: 5px;
+  height: 5px;
+  animation-delay: -1.7s;
+}
+
+.hero-sparkle:nth-child(8) {
+  top: 56%;
+  left: 85%;
+  width: 8px;
+  height: 8px;
+  animation-delay: -5.2s;
+}
+
+.hero-sparkle:nth-child(9) {
+  top: 83%;
+  left: 92%;
+  width: 5px;
+  height: 5px;
+  animation-delay: -0.5s;
+}
+
+.hero-sparkle:nth-child(10) {
+  top: 12%;
+  left: 86%;
+  width: 6px;
+  height: 6px;
+  animation-delay: -3.8s;
+}
+
+.hero-sparkle:nth-child(11) {
+  top: 74%;
+  left: 61%;
+  animation-delay: -2.5s;
+}
+
+.hero-sparkle:nth-child(12) {
+  top: 40%;
+  left: 95%;
+  width: 5px;
+  height: 5px;
+  animation-delay: -4.4s;
+}
+
+@keyframes hero-sparkle-twinkle {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.15);
+  }
+}
+
+.hero-visual {
+  animation: visual-enter 850ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hero-image-card {
+  transform-style: preserve-3d;
+  transform: perspective(1000px) rotateY(calc(var(--mx, 0) * 0.18deg)) rotateX(calc(var(--my, 0) * -0.18deg));
+  transition: transform 650ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.hero-parallax {
+  transform: translate(calc(var(--mx, 0) * var(--k, 0) * 1px), calc(var(--my, 0) * var(--k, 0) * 1px));
+  transition: transform 400ms ease-out;
+}
+
+.hero-image {
+  animation: hero-image-reveal 1200ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@keyframes visual-enter {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes hero-image-reveal {
+  from {
+    opacity: 0.75;
+    transform: scale(1.035);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Animation utilities (moved from page.tsx <style jsx global>)        */
+/* ------------------------------------------------------------------ */
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes blob {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(20px, -30px) scale(1.05);
+  }
+  50% {
+    transform: translate(-10px, 20px) scale(0.95);
+  }
+  75% {
+    transform: translate(15px, 10px) scale(1.02);
+  }
+}
+
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% center;
+  }
+  50% {
+    background-position: 100% center;
+  }
+}
+
+@keyframes heartbeat {
+  0%, 20%, 40%, 100% {
+    transform: scale(1);
+  }
+  10%, 30% {
+    transform: scale(1.16);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.8s ease-out both;
+}
+
+.animate-fade-in-down {
+  animation: fade-in-down 0.6s ease-out both;
+}
+
+.animate-blob {
+  animation: blob 8s ease-in-out infinite;
+}
+
+.animate-heartbeat {
+  animation: heartbeat 1.8s ease-in-out infinite;
+}
+
+.animation-delay-200 {
+  animation-delay: 200ms;
+}
+
+.animation-delay-400 {
+  animation-delay: 400ms;
+}
+
+.animation-delay-600 {
+  animation-delay: 600ms;
+}
+
+.animation-delay-2000 {
+  animation-delay: 2s;
+}
+
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.hero-title-accent {
+  color: transparent;
+  font-weight: 500;
+  background-size: 200% auto;
+  animation: gradient-shift 4s ease-in-out infinite;
+}
+
+/* ------------------------------------------------------------------ */
+/* Platform landing-page dark theme                                    */
+/* ------------------------------------------------------------------ */
+
+html[data-theme='dark'] {
+  background: #0b1220;
+  color-scheme: dark;
+}
+
+html[data-theme='dark'] body {
+  background: #0b1220;
+}
+
+html[data-theme='dark'] .platform-shell {
+  background: #0b1220;
+  color: #e7edf7;
+}
+
+html[data-theme='dark'] .platform-shell header,
+html[data-theme='dark'] .platform-shell footer {
+  border-color: #29374c;
+  background: rgba(11, 18, 32, 0.94);
+}
+
+html[data-theme='dark'] .platform-shell header nav[aria-label='Mobile'] {
+  border-color: #29374c;
+}
+
+html[data-theme='dark'] .platform-shell header nav a {
+  color: #a8b5c9;
+}
+
+html[data-theme='dark'] .platform-shell header nav a:hover {
+  color: #f1f5fb;
+}
+
+html[data-theme='dark'] .platform-shell .theme-toggle {
+  border-color: #3a4b64;
+  background: #141f31;
+  color: #c4d2e7;
+}
+
+html[data-theme='dark'] .platform-shell .theme-toggle:hover {
+  border-color: #58749a;
+  background: #1b2a40;
+  color: #f1f5fb;
+}
+
+html[data-theme='dark'] .platform-shell .brand-mark {
+  background-image: linear-gradient(135deg, #397bd4, #234d91);
+}
+
+html[data-theme='dark'] .platform-shell .primary-action {
+  background: linear-gradient(180deg, #2e69c1, #234f98);
+  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.22);
+}
+
+html[data-theme='dark'] .platform-shell .primary-action:hover {
+  background: linear-gradient(180deg, #2559a5, #1c447f);
+  box-shadow: 0 16px 40px rgba(37, 99, 235, 0.28);
+}
+
+html[data-theme='dark'] .platform-shell .hero-section {
+  border-color: #29374c;
+  background:
+    radial-gradient(ellipse 48% 90% at 82% 48%, rgba(64, 112, 190, 0.22), transparent 74%),
+    radial-gradient(ellipse 44% 88% at 2% 2%, rgba(65, 101, 157, 0.12), transparent 78%),
+    linear-gradient(118deg, #0c1525 0%, #111d31 50%, #172841 100%);
+  background-size: 150% 150%, 150% 150%, 150% 150%;
+}
+
+html[data-theme='dark'] .platform-shell .hero-grid {
+  background-image:
+    linear-gradient(rgba(125, 172, 238, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(125, 172, 238, 0.055) 1px, transparent 1px),
+    repeating-radial-gradient(ellipse at 78% 48%, transparent 0 54px, rgba(125, 172, 238, 0.09) 55px 56px, transparent 57px 112px);
+  background-size: 44px 44px, 44px 44px, 100% 100%;
+}
+
+html[data-theme='dark'] .platform-shell .hero-glow-blue {
+  background-color: rgba(59, 130, 246, 0.16);
+}
+
+html[data-theme='dark'] .platform-shell .hero-glow-slate {
+  background-color: rgba(89, 115, 174, 0.12);
+}
+
+html[data-theme='dark'] .platform-shell .hero-sparkle {
+  color: rgba(165, 200, 255, 0.8);
+}
+
+html[data-theme='dark'] .platform-shell .hero-visual-glow {
+  background-image: linear-gradient(135deg, rgba(70, 125, 210, 0.35), transparent 55%, rgba(111, 130, 185, 0.18));
+  opacity: 0.55;
+}
+
+html[data-theme='dark'] .platform-shell .hero-title-accent {
+  background-image: linear-gradient(90deg, #81b9ff, #c2dcff, #81b9ff);
+  color: transparent;
+}
+
+html[data-theme='dark'] .platform-shell .hero-image-frame {
+  background: #1c2a3e;
+}
+
+html[data-theme='dark'] .platform-shell .workspace-image-frame {
+  background: #1a273a;
+}
+
+html[data-theme='dark'] .platform-shell .workspace-image-shade {
+  background-image: linear-gradient(to top, rgba(10, 22, 43, 0.52), transparent 70%);
+}
+
+html[data-theme='dark'] .platform-shell .metrics-strip {
+  border-color: #29374c;
+  background: #0e1727;
+}
+
+html[data-theme='dark'] .platform-shell .workspace-card,
+html[data-theme='dark'] .platform-shell .integration-card {
+  border-color: #2c3c53;
+  background: #121e2e;
+}
+
+html[data-theme='dark'] .platform-shell .workspace-card:hover,
+html[data-theme='dark'] .platform-shell .integration-card:hover {
+  border-color: #4a6384;
+  background: #17263a;
+}
+
+html[data-theme='dark'] .platform-shell .portal-card {
+  border-color: #3b4a63;
+  background: linear-gradient(115deg, #1c2940, #182438 65%, #172236);
+}
+
+html[data-theme='dark'] .platform-shell .portal-card h3 {
+  color: #dce9fb;
+}
+
+html[data-theme='dark'] .platform-shell .portal-action {
+  border-color: #4a6486;
+  background: #1c2c44;
+  color: #b7d5ff;
+}
+
+html[data-theme='dark'] .platform-shell .integration-band {
+  border-color: #29374c;
+  background: linear-gradient(180deg, #101a2a, #0e1727);
+}
+
+html[data-theme='dark'] .platform-shell .integration-card > span:first-child {
+  background: #1d2e47;
+  color: #a9ccff;
+}
+
+html[data-theme='dark'] .platform-shell .integration-card > span:nth-child(2) span:nth-child(2) {
+  background: #54749d;
+}
+
+html[data-theme='dark'] .platform-shell .integration-card > svg {
+  color: #9dc4fb;
+}
+
+html[data-theme='dark'] .platform-shell .closing-section {
+  border-color: #29374c;
+  background: #0e1727;
+}
+
+html[data-theme='dark'] .platform-shell .safety-glow {
+  background-color: rgba(59, 130, 246, 0.16);
+}
+
+html[data-theme='dark'] .platform-shell .closing-glow {
+  background-image: radial-gradient(ellipse at center, rgba(59, 130, 246, 0.06), transparent 70%);
+}
+
+html[data-theme='dark'] .platform-shell .secondary-action {
+  border-color: #3a4b64;
+  background: #172338;
+  color: #e0e9f7;
+}
+
+html[data-theme='dark'] .platform-shell .secondary-action:hover {
+  border-color: #58749a;
+  background: #1d2c43;
+}
+
+html[data-theme='dark'] .platform-shell [class*='text-[#16232e]'],
+html[data-theme='dark'] .platform-shell [class*='text-[#0f1b24]'] {
+  color: #e7edf7;
+}
+
+html[data-theme='dark'] .platform-shell [class*='text-[#607087]'] {
+  color: #a8b5c9;
+}
+
+html[data-theme='dark'] .platform-shell [class*='text-[#2b5f9f]'],
+html[data-theme='dark'] .platform-shell [class*='text-[#214f8b]'],
+html[data-theme='dark'] .platform-shell [class*='text-[#285d9f]'],
+html[data-theme='dark'] .platform-shell [class*='text-[#5c7eaf]'],
+html[data-theme='dark'] .platform-shell [class*='text-[#2563eb]'] {
+  color: #9cc8ff;
+}
+
+html[data-theme='dark'] .platform-shell [class*='border-[#e0e7f0]'],
+html[data-theme='dark'] .platform-shell [class*='border-[#e1e8f1]'] {
+  border-color: #2c3c53;
+}
+
+html[data-theme='dark'] .platform-shell [class*='bg-[#edf3fb]'] {
+  background-color: #1d2e47;
+}
+
+html[data-theme='dark'] .platform-shell [class*='bg-[#2e69c1]'] {
+  background-color: #60a5fa;
+}
+
+html[data-theme='dark'] .platform-shell [class*='bg-[#aec1dc]'] {
+  background-color: #54749d;
+}
+
+html[data-theme='dark'] .platform-shell .integration-card:hover > span:first-child,
+html[data-theme='dark'] .platform-shell .integration-card:focus-visible > span:first-child {
+  background: #60a5fa;
+  color: #0b1220;
+}
+
+html[data-theme='dark'] .platform-shell .integration-card:hover > svg,
+html[data-theme='dark'] .platform-shell .integration-card:focus-visible > svg {
+  color: #60a5fa;
+}
+
+html[data-theme='dark'] .platform-shell :focus-visible {
+  outline-color: #9cc8ff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .platform-shell .hero-image-card,
+  .platform-shell .hero-glow,
+  .platform-shell .hero-parallax,
+  .platform-shell .hero-image {
+    transform: none !important;
+  }
+
+  .platform-shell .hero-sparkle {
+    animation: none;
+    opacity: 0.5;
+  }
+}

@@ -1,0 +1,24 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+.turbo/
+*.tsbuildinfo
+test-results/
+playwright-report/
+.data/
+
+# Secrets: never commit an environment file.
+.env
+.env.*
+!.env.example
+!.env.*.example
+.env.legacy
+
+# Tooling-managed folders
+.freebuff/
+.cloud-attachments/
+
+.DS_Store
+*.log

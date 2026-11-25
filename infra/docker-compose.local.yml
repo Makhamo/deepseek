@@ -1,0 +1,469 @@
+# Local development stack: infrastructure plus every workspace built from
+# source. This is not a deployment file (see infra/deploy/docker-compose.yml).
+#
+#   docker compose -f infra/docker-compose.local.yml up --build
+#
+# Host ports are shifted for Postgres/Redis/RabbitMQ so this stack can run next
+# to the infra-only stack started by `npm run infra:up`. Volumes are scoped to
+# the `uhs-local` project, so data is not shared with that stack.
+#
+# Migrations run as one-shot services after Postgres is healthy, and each
+# service waits for its migration before starting.
+
+name: uhs-local
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+x-app: &app
+  restart: unless-stopped
+  logging: *logging
+  networks: [internal]
+
+x-db-depends: &db-depends
+  postgres:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+
+# Shared by every service. Values that need a hostname are resolved inside the
+# Compose network; the browser only ever talks to web on port 3000.
+x-env: &shared-env
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  RABBITMQ_URL: amqp://uhs:uhs@rabbitmq:5672
+  AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+  # Browser-facing origin. Change APP_ORIGIN and WEB_HOST_PORT together when
+  # port 3000 is already taken on the host.
+  AUTH_ISSUER: ${APP_ORIGIN:-http://localhost:3000}
+  AUTH_JWT_ALG: EdDSA
+  AUTH_AUDIENCE: uhs-api
+  CORS_ORIGINS: ${APP_ORIGIN:-http://localhost:3000}
+
+x-healthcheck: &healthcheck
+  interval: 30s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - '5433:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP only becomes available once the entrypoint's init scripts finish,
+      # so migrations never start against a half-initialised cluster.
+      test: ['CMD-SHELL', 'pg_isready -U postgres -h 127.0.0.1 -d postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *logging
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6380:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [internal]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      RABBITMQ_DEFAULT_USER: uhs
+      RABBITMQ_DEFAULT_PASS: uhs
+    ports:
+      - '5673:5672'
+      - '15673:15672'
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    networks: [internal]
+
+  auth:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/auth/Dockerfile
+    image: uhs/uhs-auth:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: auth
+      PORT: '4001'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_auth
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_auth
+      BETTER_AUTH_SECRET: local-development-secret-value-32chars
+      BETTER_AUTH_URL: ${APP_ORIGIN:-http://localhost:3000}
+    ports:
+      - '4001:4001'
+    depends_on:
+      <<: *db-depends
+      migrate-auth:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4001/health/live > /dev/null || exit 1']
+
+  migrate-auth:
+    <<: *app
+    image: uhs/uhs-auth:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: auth
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_auth
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_auth
+      BETTER_AUTH_SECRET: local-development-secret-value-32chars
+      BETTER_AUTH_URL: ${APP_ORIGIN:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  core:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/core/Dockerfile
+    image: uhs/uhs-core:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: core
+      PORT: '4002'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_core
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_core
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '4002:4002'
+    depends_on:
+      <<: *db-depends
+      migrate-core:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4002/health/live > /dev/null || exit 1']
+
+  migrate-core:
+    <<: *app
+    image: uhs/uhs-core:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: core
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_core
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_core
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  doctor:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/doctor/Dockerfile
+    image: uhs/uhs-doctor:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: doctor
+      PORT: '4003'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_doctor
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_doctor
+    ports:
+      - '4003:4003'
+    depends_on:
+      <<: *db-depends
+      migrate-doctor:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4003/health/live > /dev/null || exit 1']
+
+  migrate-doctor:
+    <<: *app
+    image: uhs/uhs-doctor:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: doctor
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_doctor
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_doctor
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  triage:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/triage/Dockerfile
+    image: uhs/uhs-triage:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: triage
+      PORT: '4004'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_triage
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_triage
+    ports:
+      - '4004:4004'
+    depends_on:
+      <<: *db-depends
+      migrate-triage:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4004/health/live > /dev/null || exit 1']
+
+  migrate-triage:
+    <<: *app
+    image: uhs/uhs-triage:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: triage
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_triage
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_triage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  lab:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/lab/Dockerfile
+    image: uhs/uhs-lab:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: lab
+      PORT: '4005'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_lab
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_lab
+    ports:
+      - '4005:4005'
+    depends_on:
+      <<: *db-depends
+      migrate-lab:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4005/health/live > /dev/null || exit 1']
+
+  migrate-lab:
+    <<: *app
+    image: uhs/uhs-lab:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: lab
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_lab
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_lab
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  nicu:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/nicu/Dockerfile
+    image: uhs/uhs-nicu:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: nicu
+      PORT: '4006'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_nicu
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_nicu
+    ports:
+      - '4006:4006'
+    depends_on:
+      <<: *db-depends
+      migrate-nicu:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4006/health/live > /dev/null || exit 1']
+
+  migrate-nicu:
+    <<: *app
+    image: uhs/uhs-nicu:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: nicu
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_nicu
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_nicu
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pharmacy:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/pharmacy/Dockerfile
+    image: uhs/uhs-pharmacy:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: pharmacy
+      PORT: '4007'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_pharmacy
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_pharmacy
+    ports:
+      - '4007:4007'
+    depends_on:
+      <<: *db-depends
+      migrate-pharmacy:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4007/health/live > /dev/null || exit 1']
+
+  migrate-pharmacy:
+    <<: *app
+    image: uhs/uhs-pharmacy:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: pharmacy
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_pharmacy
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_pharmacy
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  claims:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/claims/Dockerfile
+    image: uhs/uhs-claims:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: claims
+      PORT: '4008'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_claims
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_claims
+    ports:
+      - '4008:4008'
+    depends_on:
+      <<: *db-depends
+      migrate-claims:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4008/health/live > /dev/null || exit 1']
+
+  migrate-claims:
+    <<: *app
+    image: uhs/uhs-claims:local
+    restart: 'no'
+    command: ['node', 'dist/db/migrate-cli.js']
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: claims
+      PORT: '0'
+      DATABASE_URL: postgresql://uhs_app:uhs_app@postgres:5432/uhs_claims
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:uhs_migrator@postgres:5432/uhs_claims
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  notifications:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: services/notifications/Dockerfile
+    image: uhs/uhs-notifications:local
+    environment:
+      <<: *shared-env
+      SERVICE_NAME: notifications
+      PORT: '4009'
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '4009:4009'
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4009/health/live > /dev/null || exit 1']
+
+  web:
+    <<: *app
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    image: uhs/uhs-web:local
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      AUTH_SERVICE_URL: http://auth:4001
+      CORE_SERVICE_URL: http://core:4002
+      DOCTOR_SERVICE_URL: http://doctor:4003
+      TRIAGE_SERVICE_URL: http://triage:4004
+      LAB_SERVICE_URL: http://lab:4005
+      NICU_SERVICE_URL: http://nicu:4006
+      PHARMACY_SERVICE_URL: http://pharmacy:4007
+      CLAIMS_SERVICE_URL: http://claims:4008
+      NOTIFICATIONS_SERVICE_URL: http://notifications:4009
+    ports:
+      - '${WEB_HOST_PORT:-3000}:3000'
+    depends_on:
+      auth:
+        condition: service_healthy
+      core:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/ > /dev/null || exit 1']
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:
+
+networks:
+  internal:

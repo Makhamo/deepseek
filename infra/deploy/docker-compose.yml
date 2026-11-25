@@ -1,0 +1,315 @@
+# Deployment stack for a VPS. One stack per environment, so staging and
+# production run side by side without sharing containers, networks or volumes.
+#
+#   docker compose -p uhs-staging --env-file .env.staging up -d
+#
+# CI copies this file and postgres-init/ to the VPS; .env.<environment> stays
+# on the server and is never committed.
+
+name: ${COMPOSE_PROJECT_NAME:-uhs-staging}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+x-app: &app
+  restart: unless-stopped
+  logging: *logging
+  networks: [internal]
+
+x-db-depends: &db-depends
+  postgres:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP only becomes available once the entrypoint's init scripts finish.
+      test: ['CMD-SHELL', 'pg_isready -U postgres -h 127.0.0.1 -d postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *logging
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [internal]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    networks: [internal]
+
+  auth:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-auth:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: auth
+      PORT: '4001'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_auth
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_auth
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      AUTH_JWT_ALG: ${AUTH_JWT_ALG:-EdDSA}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4001/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  core:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-core:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: core
+      PORT: '4002'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_core
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_core
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4002/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  doctor:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-doctor:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: doctor
+      PORT: '4003'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_doctor
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_doctor
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4003/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  triage:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-triage:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: triage
+      PORT: '4004'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_triage
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_triage
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4004/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  lab:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-lab:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: lab
+      PORT: '4005'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_lab
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_lab
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4005/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  nicu:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-nicu:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: nicu
+      PORT: '4006'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_nicu
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_nicu
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4006/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  pharmacy:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-pharmacy:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: pharmacy
+      PORT: '4007'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_pharmacy
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_pharmacy
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4007/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  claims:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-claims:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: claims
+      PORT: '4008'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://uhs_app:${POSTGRES_APP_PASSWORD}@postgres:5432/uhs_claims
+      MIGRATION_DATABASE_URL: postgresql://uhs_migrator:${POSTGRES_MIGRATOR_PASSWORD}@postgres:5432/uhs_claims
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on: *db-depends
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4008/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  notifications:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-notifications:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: notifications
+      PORT: '4009'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      REDIS_URL: redis://redis:6379
+      AUTH_JWKS_URL: http://auth:4001/api/auth/jwks
+      AUTH_ISSUER: ${AUTH_ISSUER}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:4009/health/live > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  web:
+    <<: *app
+    image: ${UHS_IMAGE_PREFIX}/uhs-web:${IMAGE_TAG}
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      AUTH_SERVICE_URL: http://auth:4001
+      CORE_SERVICE_URL: http://core:4002
+      DOCTOR_SERVICE_URL: http://doctor:4003
+      TRIAGE_SERVICE_URL: http://triage:4004
+      LAB_SERVICE_URL: http://lab:4005
+      NICU_SERVICE_URL: http://nicu:4006
+      PHARMACY_SERVICE_URL: http://pharmacy:4007
+      CLAIMS_SERVICE_URL: http://claims:4008
+      NOTIFICATIONS_SERVICE_URL: http://notifications:4009
+    ports:
+      - '${WEB_HOST_PORT}:3000'
+    depends_on:
+      auth:
+        condition: service_healthy
+      core:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/ > /dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:
+
+networks:
+  internal:

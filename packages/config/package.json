@@ -1,0 +1,23 @@
+{
+  "name": "@uhs/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tsconfig/service.json": "./tsconfig/service.json",
+    "./tsconfig/library.json": "./tsconfig/library.json",
+    "./tsconfig/react.json": "./tsconfig/react.json",
+    "./tsconfig/next.json": "./tsconfig/next.json",
+    "./prettier": "./prettier/index.ts"
+  },
+  "files": [
+    "tsconfig",
+    "prettier"
+  ],
+  "scripts": {
+    "build": "node -e \"process.exit(0)\"",
+    "typecheck": "node -e \"process.exit(0)\"",
+    "lint": "node -e \"process.exit(0)\"",
+    "test": "node -e \"process.exit(0)\""
+  }
+}
