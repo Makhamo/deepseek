@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { param } from "../lib/params.js";
 import * as PermissionModel from "../models/permission.model.js";
 
 export async function list(_req: Request, res: Response) {
@@ -27,8 +28,8 @@ export async function create(req: Request, res: Response) {
 
 export async function listByRole(req: Request, res: Response) {
   try {
-    const permissions = await PermissionModel.findByRole(req.params.role);
-    res.json({ role: req.params.role, permissions });
+    const permissions = await PermissionModel.findByRole(param(req, "role"));
+    res.json({ role: param(req, "role"), permissions });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Failed to list role permissions" });
@@ -42,7 +43,7 @@ export async function assignToRole(req: Request, res: Response) {
       return res.status(400).json({ error: "permissionId is required" });
     }
     const result = await PermissionModel.assignToRole(
-      req.params.role,
+      param(req, "role"),
       permissionId
     );
     res.status(201).json(result);

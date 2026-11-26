@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { param } from "../lib/params.js";
 import * as StaffModel from "../models/staff.model.js";
 
 export async function list(_req: Request, res: Response) {
@@ -13,7 +14,7 @@ export async function list(_req: Request, res: Response) {
 
 export async function getByUserId(req: Request, res: Response) {
   try {
-    const row = await StaffModel.findByUserId(req.params.userId);
+    const row = await StaffModel.findByUserId(param(req, "userId"));
     if (!row) return res.status(404).json({ error: "Staff profile not found" });
     res.json({ staffProfile: row });
   } catch (e) {

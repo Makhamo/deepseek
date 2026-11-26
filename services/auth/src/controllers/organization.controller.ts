@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { param } from "../lib/params.js";
 import * as OrgModel from "../models/organization.model.js";
 
 export async function list(_req: Request, res: Response) {
@@ -13,7 +14,7 @@ export async function list(_req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   try {
-    const row = await OrgModel.findById(req.params.id);
+    const row = await OrgModel.findById(param(req, "id"));
     if (!row) return res.status(404).json({ error: "Organization not found" });
     res.json({ organization: row });
   } catch (e) {
@@ -38,7 +39,7 @@ export async function create(req: Request, res: Response) {
 
 export async function update(req: Request, res: Response) {
   try {
-    const updated = await OrgModel.update(req.params.id, req.body);
+    const updated = await OrgModel.update(param(req, "id"), req.body);
     if (!updated) return res.status(404).json({ error: "Organization not found" });
     res.json({ organization: updated });
   } catch (e) {
@@ -49,7 +50,7 @@ export async function update(req: Request, res: Response) {
 
 export async function listMembers(req: Request, res: Response) {
   try {
-    const members = await OrgModel.findMembers(req.params.id);
+    const members = await OrgModel.findMembers(param(req, "id"));
     res.json({ members });
   } catch (e) {
     console.error(e);
@@ -59,7 +60,7 @@ export async function listMembers(req: Request, res: Response) {
 
 export async function listDepartments(req: Request, res: Response) {
   try {
-    const departments = await OrgModel.findDepartments(req.params.id);
+    const departments = await OrgModel.findDepartments(param(req, "id"));
     res.json({ departments });
   } catch (e) {
     console.error(e);

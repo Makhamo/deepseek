@@ -1,4 +1,8 @@
+'use client';
+
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { authClient } from '@/lib/auth-client';
 import {
   Calendar, Activity, MessageSquare, FlaskConical, Pill, Video, MapPin,
   AlertTriangle, FileText, HeartPulse, ArrowRight,
@@ -19,6 +23,30 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function PatientHomePage() {
+  const { data: session, isPending } = authClient.useSession();
+  const [firstName, setFirstName] = useState('');
+  const [profileLoading, setProfileLoading] = useState(true);
+
+  useEffect(() => {
+    if (isPending) return;
+    if (!session?.user) {
+      setProfileLoading(false);
+      return;
+    }
+    setProfileLoading(true);
+    fetch('/api/patients/me', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const profile = data?.patientProfile;
+        if (profile?.firstName) setFirstName(profile.firstName);
+        else if (session.user.name) setFirstName(session.user.name.split(' ')[0]);
+      })
+      .catch(() => {
+        if (session.user?.name) setFirstName(session.user.name.split(' ')[0]);
+      })
+      .finally(() => setProfileLoading(false));
+  }, [session?.user, isPending]);
+
   const today = new Date().toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' });
   const upcoming = SEED_APPOINTMENTS.filter((a) => a.status === 'confirmed' || a.status === 'pending');
   const next = upcoming[0];
@@ -27,13 +55,23 @@ export default function PatientHomePage() {
   const careTeam = DOCTORS.filter((d) => upcoming.some((a) => a.doctor === d.name));
   const [nextDay = '', nextMonthRaw = ''] = next ? next.date.split(' ') : [];
   const nextMonth = nextMonthRaw.toUpperCase();
+  const greetingName = profileLoading ? '' : (firstName || session?.user?.name?.split(' ')[0] || 'there');
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       {/* Greeting */}
       <div>
         <p className="text-xs font-medium text-teal-600">{today}</p>
-        <h2 className="mt-1 text-2xl font-bold text-slate-900">Good afternoon, Thandi</h2>
+        <h2 className="mt-1 text-2xl font-bold text-slate-900">
+          {profileLoading ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-teal-600 border-t-transparent" />
+              Loading your profile…
+            </span>
+          ) : (
+            <>Good afternoon, {greetingName}</>
+          )}
+        </h2>
         <p className="mt-1 text-sm text-slate-500">Here’s what’s happening with your health today.</p>
       </div>
 

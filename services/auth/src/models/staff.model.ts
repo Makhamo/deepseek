@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
-import { randomUUID } from "crypto";
 import { db } from "../db/index.js";
-import { staffProfile, user } from "../db/schema.js";
+import { staffProfile, users } from "../db/schema.js";
+import { sql } from "drizzle-orm";
 
 export async function findAll() {
   return db
@@ -15,12 +15,12 @@ export async function findAll() {
       title: staffProfile.title,
       phone: staffProfile.phone,
       isActive: staffProfile.isActive,
-      name: user.name,
-      email: user.email,
-      role: user.role,
+      name: sql<string>`${users.firstName} || ' ' || ${users.lastName}`.as("name"),
+      email: users.email,
+      role: sql<string>`'staff'`.as("role"),
     })
     .from(staffProfile)
-    .innerJoin(user, eq(staffProfile.userId, user.id));
+    .innerJoin(users, eq(staffProfile.userId, users.id));
 }
 
 export async function findByUserId(userId: string) {
@@ -58,9 +58,8 @@ export async function upsert(data: {
     return findByUserId(data.userId);
   }
 
-  const id = randomUUID();
   await db.insert(staffProfile).values({
-    id,
+    id: data.userId,
     userId: data.userId,
     organizationId: data.organizationId ?? null,
     departmentId: data.departmentId ?? null,

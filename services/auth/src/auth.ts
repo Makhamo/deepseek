@@ -5,11 +5,11 @@ import { organization, jwt, admin, twoFactor } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { defaultStatements, adminAc } from "better-auth/plugins/admin/access";
 import { eq } from "drizzle-orm";
-import { randomUUID } from "crypto";
 
 import { db } from "./db/index.js";
-import { schema, patientProfile } from "./db/schema.js";
-import { propagateUserToServices } from "./lib/propagate";
+import { schema, patientProfile, users } from "./db/schema.js";
+import { uuidv7 } from "./lib/uuidv7.js";
+import { propagateUserToServicesLegacy as propagateUserToServices } from "./lib/propagate.js";
 
 /* ------------------------------------------------------------------ */
 /*  Access control (Better Auth admin plugin)                          */
@@ -113,8 +113,10 @@ export const auth = betterAuth({
               .limit(1);
 
             if (existing.length === 0) {
+              // Use the same UUID as user.id so PatientId === UserId across
+              // every service database (frontend can also send uuidv7).
               await db.insert(patientProfile).values({
-                id: randomUUID(),
+                id: user.id,
                 userId: user.id,
                 // All demographic fields left null — patient fills them
                 // via POST /api/patients/me.
@@ -124,6 +126,23 @@ export const auth = betterAuth({
             // Do NOT fail the signup if profile creation fails; the
             // patient can still sign in and we can backfill later.
             console.error("[auth] failed to create patient_profile", err);
+          }
+
+          // Sync to users table with proper first/last name and UUID-compatible id
+          try {
+            const nameParts = (user.name || "").trim().split(/\s+/);
+            const firstName = nameParts[0] || "Patient";
+            const lastName = nameParts.slice(1).join(" ") || "User";
+            await db.insert(users).values({
+              id: user.id,
+              email: user.email,
+              firstName,
+              lastName,
+              status: "active",
+              isActive: true,
+            }).onConflictDoNothing();
+          } catch (err) {
+            console.error("[auth] failed to sync users table", err);
           }
 
           // 2. Fan-out the same user.id to downstream services so
@@ -167,7 +186,11 @@ export const auth = betterAuth({
 
   advanced: {
     database: {
-      generateId: false,
+      // Generate ids in app code (time-ordered UUIDv7, same format as everywhere else).
+      // This was `generateId: false`, which makes Better Auth omit ids and expects the
+      // database to supply them — our id columns have no default, so inserts into
+      // user / session / account failed.
+      generateId: () => uuidv7(),
     },
     // Only needed if frontend and auth are on different registrable domains.
     // For localhost:3000 -> localhost:4001 the default SameSite=Lax works.

@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Plus, Trash2, ShieldCheck, AlertTriangle, TriangleAlert, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -31,6 +31,63 @@ function SettingsInner() {
 
   const [tab, setTabState] = useState<TabId>(initial);
   const [notice, setNotice] = useState('');
+
+  // Real patient profile
+  const [profile, setProfile] = useState({
+    firstName: '', lastName: '', email: '', dateOfBirth: '', gender: '',
+    idNumber: '', phone: '', address: '', bloodType: '', medicalAidNumber: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(true);
+
+  useEffect(() => {
+    setProfileLoading(true);
+    fetch('/api/patients/me', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const pp = data?.patientProfile || {};
+        setProfile({
+          firstName: pp.firstName || '',
+          lastName: pp.lastName || '',
+          email: pp.email || '',
+          dateOfBirth: pp.dateOfBirth ? new Date(pp.dateOfBirth).toISOString().slice(0, 10) : '',
+          gender: pp.gender || '',
+          idNumber: pp.medicalAidNumber || '',
+          phone: pp.phone || '',
+          address: pp.address || '',
+          bloodType: pp.bloodType || '',
+          medicalAidNumber: pp.medicalAidNumber || '',
+        });
+      })
+      .catch(() => {})
+      .finally(() => setProfileLoading(false));
+  }, []);
+
+  const savePersonal = async () => {
+    setSaving(true);
+    setNotice('');
+    try {
+      const res = await fetch('/api/patients/me', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          dateOfBirth: profile.dateOfBirth || null,
+          gender: profile.gender || null,
+          phone: profile.phone || null,
+          address: profile.address || null,
+          bloodType: profile.bloodType || null,
+          medicalAidNumber: profile.medicalAidNumber || null,
+        }),
+      });
+      if (res.ok) setNotice('Profile saved.');
+      else setNotice('Could not save profile.');
+    } catch {
+      setNotice('Could not save profile.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // Emergency contacts
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -83,25 +140,36 @@ function SettingsInner() {
           {/* PERSONAL */}
           {tab === 'personal' && (
             <section>
+              {profileLoading ? (
+                <div className="flex items-center gap-3 py-12 text-sm text-slate-500">
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-teal-600 border-t-transparent" />
+                  Loading your profile…
+                </div>
+              ) : (
               <h3 className="text-sm font-semibold text-slate-900">Personal information</h3>
-              <p className="mt-1 text-xs text-slate-500">Keep your identity and contact details up to date.</p>
+              <p className="mt-1 text-xs text-slate-500">Keep your identity and contact details up to date. Changes are saved to your real patient profile.</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <div><label className={labelCls}>First name</label><input defaultValue="Thandi" className={inputCls} /></div>
-                <div><label className={labelCls}>Surname</label><input defaultValue="Ndlovu" className={inputCls} /></div>
-                <div><label className={labelCls}>Email address</label><input defaultValue="thandi@example.com" className={inputCls} /></div>
-                <div><label className={labelCls}>Date of birth</label><input type="date" className={inputCls} /></div>
+                <div><label className={labelCls}>First name</label><input value={profile.firstName} onChange={(e) => setProfile({ ...profile, firstName: e.target.value })} className={inputCls} /></div>
+                <div><label className={labelCls}>Surname</label><input value={profile.lastName} onChange={(e) => setProfile({ ...profile, lastName: e.target.value })} className={inputCls} /></div>
+                <div><label className={labelCls}>Email address</label><input value={profile.email} disabled className={inputCls + ' bg-slate-50'} /></div>
+                <div><label className={labelCls}>Date of birth</label><input type="date" value={profile.dateOfBirth} onChange={(e) => setProfile({ ...profile, dateOfBirth: e.target.value })} className={inputCls} /></div>
                 <div>
                   <label className={labelCls}>Gender</label>
-                  <select defaultValue="" className={inputCls}>
-                    <option value="" disabled>Select</option>
-                    <option>Female</option><option>Male</option><option>Other</option>
+                  <select value={profile.gender} onChange={(e) => setProfile({ ...profile, gender: e.target.value })} className={inputCls}>
+                    <option value="">Select</option>
+                    <option value="female">Female</option>
+                    <option value="male">Male</option>
+                    <option value="other">Other</option>
                   </select>
                 </div>
-                <div><label className={labelCls}>ID number</label><input className={inputCls} /></div>
-                <div><label className={labelCls}>Phone number</label><input defaultValue="+27 82 123 4567" className={inputCls} /></div>
-                <div className="sm:col-span-2"><label className={labelCls}>Address</label><textarea rows={3} className={inputCls} /></div>
+                <div><label className={labelCls}>ID / Medical aid number</label><input value={profile.medicalAidNumber} onChange={(e) => setProfile({ ...profile, medicalAidNumber: e.target.value })} className={inputCls} /></div>
+                <div><label className={labelCls}>Phone number</label><input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} className={inputCls} /></div>
+                <div className="sm:col-span-2"><label className={labelCls}>Address</label><textarea rows={3} value={profile.address} onChange={(e) => setProfile({ ...profile, address: e.target.value })} className={inputCls} /></div>
               </div>
-              <div className="mt-5 flex justify-end"><button className={primaryBtn}>Save changes</button></div>
+              <div className="mt-5 flex justify-end">
+                <button onClick={savePersonal} disabled={saving} className={primaryBtn}>{saving ? 'Saving…' : 'Save changes'}</button>
+              </div>
+              )}
             </section>
           )}
 

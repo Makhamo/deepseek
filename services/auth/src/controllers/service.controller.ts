@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { param } from "../lib/params.js";
 import * as ServiceModel from "../models/service.model.js";
 
 export async function list(_req: Request, res: Response) {
@@ -13,7 +14,7 @@ export async function list(_req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   try {
-    const row = await ServiceModel.findById(req.params.id);
+    const row = await ServiceModel.findById(param(req, "id"));
     if (!row) return res.status(404).json({ error: "Service not found" });
     res.json({ service: row });
   } catch (e) {
@@ -41,7 +42,7 @@ export async function create(req: Request, res: Response) {
 
 export async function update(req: Request, res: Response) {
   try {
-    const updated = await ServiceModel.update(req.params.id, req.body);
+    const updated = await ServiceModel.update(param(req, "id"), req.body);
     if (!updated) return res.status(404).json({ error: "Service not found" });
     res.json({ service: updated });
   } catch (e) {
@@ -53,8 +54,8 @@ export async function update(req: Request, res: Response) {
 export async function linkToOrg(req: Request, res: Response) {
   try {
     const row = await ServiceModel.linkToOrganization({
-      serviceId: req.params.serviceId,
-      organizationId: req.params.orgId,
+      serviceId: param(req, "serviceId"),
+      organizationId: param(req, "orgId"),
       price: req.body.price,
       currency: req.body.currency,
       isAvailable: req.body.isAvailable,
@@ -68,7 +69,7 @@ export async function linkToOrg(req: Request, res: Response) {
 
 export async function listByOrg(req: Request, res: Response) {
   try {
-    const services = await ServiceModel.findByOrganization(req.params.orgId);
+    const services = await ServiceModel.findByOrganization(param(req, "orgId"));
     res.json({ services });
   } catch (e) {
     console.error(e);

@@ -2,6 +2,23 @@ import type { NextConfig } from 'next';
 
 const isDev = process.env.NODE_ENV !== 'production';
 
+// Auth and other backend origins the browser may call directly.
+const authOrigin =
+  process.env.NEXT_PUBLIC_AUTH_URL || 'http://localhost:4001';
+const extraConnect = [
+  authOrigin,
+  'http://localhost:4001',
+  'http://127.0.0.1:4001',
+  'http://localhost:4002',
+  'http://localhost:4003',
+  'http://localhost:4004',
+  'http://localhost:4005',
+  'http://localhost:4006',
+  'http://localhost:4007',
+]
+  .filter(Boolean)
+  .join(' ');
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   // Next injects inline bootstrap scripts; eval is only needed by the dev overlay.
@@ -9,9 +26,8 @@ const contentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  // PeerJS signaling (wss) + TURN/STUN (UDP/TCP TURN doesn't go through CSP,
-  // but the WebSocket signaling and any HTTP fetch do).
-  "connect-src 'self' wss://0.peerjs.com https://0.peerjs.com",
+  // PeerJS + local auth/backend services (signup, API calls)
+  `connect-src 'self' ${extraConnect} wss://0.peerjs.com https://0.peerjs.com`,
   // Let the <video> element play blob: URLs (screen-recording / remote streams).
   "media-src 'self' blob:",
   "frame-ancestors 'none'",

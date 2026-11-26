@@ -1,18 +1,9 @@
-import { runMigrations } from '@uhs/service-kit';
-import { loadServiceConfig } from '../config.js';
-
-const config = loadServiceConfig();
-
-runMigrations({
-  databaseUrl: config.MIGRATION_DATABASE_URL,
-  migrationsFolder: './migrations',
-})
-  .then(() => {
-    process.stdout.write('migrations applied for auth\n');
-  })
-  .catch((error: unknown) => {
-    process.stderr.write(
-      'migration failed: ' + (error instanceof Error ? error.message : String(error)) + '\n',
-    );
-    process.exit(1);
-  });
+/**
+ * Prefer: npm run db:push  or  npm run db:apply-plugins
+ * This CLI was from the monorepo service-kit; auth is standalone now.
+ */
+console.error(
+  "Use: npm run db:push   or   npm run db:apply-plugins\n" +
+    "(migrate-cli via @uhs/service-kit is not used in this standalone auth hub)"
+);
+process.exit(1);

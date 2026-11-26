@@ -10,6 +10,10 @@ import http from "http";
 import { toNodeHandler } from "better-auth/node";
 
 import { auth } from "./auth.js";
+import { db, pool } from "./db/index.js";
+import { user as userTable } from "./db/schema.js";
+import { eq } from "drizzle-orm";
+import { ensureSchema } from "./db/ensure-schema.js";
 import serviceRoutes from "./routes/service.routes.js";
 import organizationRoutes from "./routes/organization.routes.js";
 import departmentRoutes from "./routes/department.routes.js";
@@ -18,6 +22,8 @@ import staffRoutes from "./routes/staff.routes.js";
 import patientRoutes from "./routes/patient.routes.js";
 import registryRoutes from "./routes/service-registry.routes.js";
 import meRoutes from "./routes/me.routes.js";
+import registerRoutes from "./routes/register.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
 
 /* ------------------------------------------------------------------ */
 /*  Env guards — fail loudly if a required var is missing             */
@@ -54,6 +60,8 @@ apiRoutes.use("/staff", staffRoutes);
 apiRoutes.use("/patients", patientRoutes);
 apiRoutes.use("/registry", registryRoutes);
 apiRoutes.use("/me", meRoutes);
+apiRoutes.use("/register", registerRoutes);
+apiRoutes.use("/admin", adminRoutes);
 
 /* ------------------------------------------------------------------ */
 /*  Security & logging                                                */
@@ -185,11 +193,80 @@ app.use(errorHandler);
 
 const httpServer = http.createServer(app);
 
-httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`Auth Hub running on port ${PORT}`);
-  console.log(`  Base URL: ${BETTER_AUTH_URL}`);
-  console.log(`  Auth:     ${BETTER_AUTH_URL}/api/auth`);
-  console.log(`  JWKS:     ${BETTER_AUTH_URL}/api/auth/jwks`);
-  console.log(`  Me:       ${BETTER_AUTH_URL}/api/me/access`);
-  console.log(`  Health:   http://localhost:${PORT}/health`);
-});
+async function start() {
+  // Create any missing tables BEFORE accepting signups. An empty database used to
+  // surface as `relation "user" does not exist` on the signup form.
+  try {
+    await ensureSchema();
+    console.log("[db] schema verified");
+  } catch (err) {
+    console.error(
+      "[db] could not verify/create the auth schema:",
+      (err as Error).message,
+      "\n     Check DATABASE_URL, or run: npm run db:bootstrap"
+    );
+  }
+
+  await seedDefaultAdmin();
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Auth Hub running on port ${PORT}`);
+    console.log(`  Base URL: ${BETTER_AUTH_URL}`);
+    console.log(`  Auth:     ${BETTER_AUTH_URL}/api/auth`);
+    console.log(`  JWKS:     ${BETTER_AUTH_URL}/api/auth/jwks`);
+    console.log(`  Me:       ${BETTER_AUTH_URL}/api/me/access`);
+    console.log(`  Health:   http://localhost:${PORT}/health`);
+  });
+}
+
+
+
+/* ------------------------------------------------------------------ */
+/*  Seed default admin if missing                                     */
+/* ------------------------------------------------------------------ */
+async function seedDefaultAdmin() {
+  const ADMIN_EMAIL = "admin@gmail.com";
+  const ADMIN_PASSWORD = "password123";
+  try {
+    const existing = await db.query.user.findFirst({
+      where: eq(userTable.email, ADMIN_EMAIL),
+    });
+    if (existing) {
+      console.log("[seed] admin already exists");
+      return;
+    }
+    console.log("[seed] creating default admin...");
+    const result = await auth.api.signUpEmail({
+      body: {
+        email: ADMIN_EMAIL,
+        password: ADMIN_PASSWORD,
+        name: "System Admin",
+      },
+    });
+    if (!result?.user?.id) {
+      console.warn("[seed] signUpEmail returned no user");
+      return;
+    }
+    const userId = result.user.id;
+    await pool.query(
+      `INSERT INTO users (id, email, first_name, last_name, status, is_active)
+       VALUES ($1, $2, 'System', 'Admin', 'active', true)
+       ON CONFLICT (id) DO NOTHING`,
+      [userId, ADMIN_EMAIL]
+    );
+    await pool.query(`UPDATE "user" SET role = 'admin' WHERE id = $1`, [userId]);
+    await pool.query(
+      `INSERT INTO staff_profile (id, user_id, is_active)
+       VALUES ($1, $1, true)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId]
+    );
+    console.log("[seed] default admin created: admin@gmail.com / password123");
+  } catch (err) {
+    console.warn("[seed] admin seed failed:", (err as Error).message);
+  }
+}
+
+await seedDefaultAdmin();
+
+void start();

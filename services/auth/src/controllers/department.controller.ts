@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import * as DepartmentModel from "../models/department.model.js";
+import { param } from "../lib/params.js";
 
 export async function create(req: Request, res: Response) {
   try {
@@ -23,7 +24,7 @@ export async function create(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   try {
-    const row = await DepartmentModel.findById(req.params.id);
+    const row = await DepartmentModel.findById(param(req, "id"));
     if (!row) return res.status(404).json({ error: "Department not found" });
     res.json({ department: row });
   } catch (e) {
@@ -34,7 +35,7 @@ export async function getById(req: Request, res: Response) {
 
 export async function update(req: Request, res: Response) {
   try {
-    const updated = await DepartmentModel.update(req.params.id, req.body);
+    const updated = await DepartmentModel.update(param(req, "id"), req.body);
     if (!updated) return res.status(404).json({ error: "Department not found" });
     res.json({ department: updated });
   } catch (e) {

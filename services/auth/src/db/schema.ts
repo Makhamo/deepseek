@@ -3,9 +3,11 @@ import {
   text,
   timestamp,
   boolean,
+  integer,
   numeric,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { relations } from "drizzle-orm";
 
 /* ------------------------------------------------------------------ */
@@ -22,8 +24,24 @@ export const user = pgTable("user", {
   banned: boolean("banned").default(false),
   banReason: text("ban_reason"),
   banExpires: timestamp("ban_expires"),
+  // twoFactor plugin
+  twoFactorEnabled: boolean("two_factor_enabled").default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const users = pgTable("users", {
+  id: text("id").primaryKey().default(sql`gen_random_uuid()::text`),
+  email: text("email").notNull().unique(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  phone: text("phone"),
+  status: text("status").notNull().default("active"),
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  isActive: boolean("is_active").notNull().default(true),
 });
 
 export const session = pgTable("session", {
@@ -230,6 +248,33 @@ export const patientProfile = pgTable("patient_profile", {
 /*  Relations                                                         */
 /* ------------------------------------------------------------------ */
 
+
+/* ------------------------------------------------------------------ */
+/*  Better Auth plugins: twoFactor + jwt (jwks)                        */
+/* ------------------------------------------------------------------ */
+
+export const twoFactor = pgTable("twoFactor", {
+  id: text("id").primaryKey(),
+  secret: text("secret").notNull(),
+  backupCodes: text("backupCodes").notNull(),
+  userId: text("userId")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  verified: boolean("verified").default(false),
+  failedVerificationCount: integer("failedVerificationCount").default(0),
+  lockedUntil: timestamp("lockedUntil"),
+});
+
+export const jwks = pgTable("jwks", {
+  id: text("id").primaryKey(),
+  publicKey: text("publicKey").notNull(),
+  privateKey: text("privateKey").notNull(),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+  expiresAt: timestamp("expiresAt"),
+  alg: text("alg"),
+  crv: text("crv"),
+});
+
 export const userRelations = relations(user, ({ one, many }) => ({
   staffProfile: one(staffProfile, {
     fields: [user.id],
@@ -323,4 +368,6 @@ export const schema = {
   serviceRegistry,
   staffProfile,
   patientProfile,
+  twoFactor,
+  jwks,
 };
